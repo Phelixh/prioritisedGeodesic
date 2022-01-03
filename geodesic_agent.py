@@ -221,7 +221,7 @@ class GeodesicAgent(object):
 
 		return loop
 
-	def smart_replay(self, num_steps, goal_states=None, goal_dist=None, prospective=False, verbose=False):
+	def replay(self, num_steps, goal_states=None, goal_dist=None, prospective=False, verbose=False):
 		'''
 			Perform replay, prioritised under a (meta-) expected value of backup rule.
 			Do this by iterating over all available transitions in memory, and averaging
@@ -262,11 +262,11 @@ class GeodesicAgent(object):
 
 				# Compute EVB for each transition
 				for tdx, transition in enumerate(self.memory):
-					need, gain, evb = self.compute_multistep_EVB_smart(transition, goal, policy,
-																	   replay_seq, 
-																	   state=self.curr_state,
-																	   M=M_pi,
-																	   prospective=prospective)
+					need, gain, evb = self.compute_multistep_EVB(transition, goal, policy,
+																 replay_seq, 
+																 state=self.curr_state,
+																 M=M_pi,
+																 prospective=prospective)
 
 					MEVBs[tdx] += goal_dist[gdx] * mevb
 
@@ -280,12 +280,24 @@ class GeodesicAgent(object):
 			replay_seq.append(best_memory)
 
 			# Learn!
-			self.learn_smart(replay_seq)
+			self.nstep_learn(replay_seq)
 
 		if verbose:
 			return np.array(replayed_experiences), (needs, gains, all_MEVBs)
 
-	def compute_multistep_EVB_smart(self, transition, goal, policy, replay_seq, curr_state, M, prospective=False):
+	def nstep_learn(transition_seq, update_policies=True):
+		'''
+			Update GR according to transition sequence. Treat last transition in sequence
+			as primary transition.
+		'''
+		dG = self.compute_nstep_update(transition_seq[-1], transition_seq[:-1])
+		self.G += self.alpha * dG
+
+		if update_policies:
+			for goal in self.goal_states:
+				self.policies[goal] = self.derive_policy(goal)
+
+	def compute_multistep_EVB(self, transition, goal, policy, replay_seq, curr_state, M, prospective=False):
 		'''
 			Compute the expected value of GR backup for a particular sequence of transitions
 			with respect to a particular goal state. Derivation for the factorization
@@ -313,7 +325,7 @@ class GeodesicAgent(object):
 			optimal_subseq = []
 
 		# Compute gain for this subsequence as well as the transition under consideration
-		gain = self.compute_gain_smart(transition, optimal_subseq, goal, policy)
+		gain = self.compute_nstep_gain(transition, optimal_subseq, goal, policy)
 
 	def get_optimal_subseq(self, replay_seq, goal, tol=1e-6):
 		'''
@@ -338,7 +350,7 @@ class GeodesicAgent(object):
 
 		return optimal_subseq
 
-	def compute_nstep_update(self, transition, optimal_subseq, goal_states=None):
+	def compute_nstep_update(self, transition, replay_seq, goal_states=None):
 		'''
 			Given a primary transition and a potentially-empty subsequence of transitions leading to it,
 			compute what the net update to the GR is.
@@ -363,14 +375,17 @@ class GeodesicAgent(object):
 			# Implement delta due to primary transition
 			dG[s_k, a_k, goal] += GR_delta
 
-			# Backpropagate delta for n-step backup as relevant
+			# Find optimal subsequence wrt this goal
+			optimal_subseq = self.get_optimal_subseq(replay_seq, goal)
+
+			# Backpropagate delta throughout this subsequence as relevant
 			for mdx, memory in enumerate(optimal_subseq):
 				s_m, a_m, s_mp = memory
 				dG[s_m, a_m, goal] += (self.gamma ** (mdx + 1)) * GR_delta
 
 		return dG
 
-	def compute_gain_smart(self, transition, optimal_subseq, goal, policy, G_p=None):
+	def compute_nstep_gain(self, transition, optimal_subseq, goal, policy, G_p=None):
 		'''
 			Compute gain blah
 		'''
@@ -401,99 +416,6 @@ class GeodesicAgent(object):
 				gain += (pi_p[s_m, action] - policy[s_m, action]) * G_p[s_m, action, goal]
 
 		return gain
-
-	def replay(self, num_steps, goal_states=None, goal_dist=None, prospective=False, verbose=False):
-		'''
-			Perform replay, prioritised under a (meta-) expected value of backup rule.
-			Do this by iterating over all available transitions in memory, and averaging
-			the EVBs over the list of potential future goal states.
-		'''
-		# Input validation, blah blah
-		if goal_states is None:
-			goal_states = self.goal_states
-		if goal_dist is None:
-			goal_dist = self.goal_dist
-
-		# If verbose usage, build storage structures
-		if verbose:
-			needs = np.zeros((num_steps, len(goal_states), self.num_states, self.num_states))
-			gains = np.zeros((num_steps, len(goal_states), len(self.memory)))
-			all_MEVBs = np.zeros((num_steps, len(goal_states), len(self.memory)))
-
-		# Begin replay computation
-		replayed_experiences = []
-		curr_replay_seq = []
-		backups = []
-		for replay_step in range(num_steps):
-			MEVBs = np.zeros(len(self.memory)) # Each update is picked greedily
-			for gdx, goal_state in enumerate(goal_states):
-
-				# Get policy for this state
-				if goal_state in self.goal_states: # If we already have this on hand, use it
-					policy = self.policies[goal_state]
-				else: # Otherwise, recompute entirely
-					policy = self.derive_policy(goal_state) 
-
-				# Derive resultant state occupancy matrix
-				M_pi = self.compute_occupancy(policy, self.T)
-
-				# Log, if desired
-				if verbose:
-					needs[replay_step, gdx, :, :] = M_pi 
-
-				# Compute EVB for each possible transition wrt this goal
-				for tdx, transition in enumerate(self.memory):
-					if not curr_replay_seq or self.__creates_loop(transition, curr_replay_seq):
-						need, gain, evb = self.compute_EVB(transition, goal_state, policy, 
-							state=self.curr_state, M=M_pi, prospective=prospective)
-					else:
-						need, gain, evb = self.compute_multistep_EVB(transition, goal_state, policy, 
-														 		curr_replay_seq, state=self.curr_state, M=M_pi,
-														 		prospective=prospective)
-					
-					MEVBs[tdx] += goal_dist[gdx] * evb
-
-					# Log gain/MEVB, if desired
-					if verbose:
-						# Log the final MEVBs, if desired
-						all_MEVBs[replay_step, gdx, tdx] = evb * goal_dist[gdx]
-						gains[replay_step, gdx, tdx] = gain
-
-			# Optimise
-			best_memory = self.memory[np.argmax(MEVBs)]
-			replayed_experiences.append(best_memory)
-			s_k, a_k, s_kp = best_memory
-
-			# Evolve current replay list
-			# If most recent replay exists, and s_k continues it, and does not create a loop...
-			if curr_replay_seq and s_k == curr_replay_seq[-1][-1] \
-			   and not self.__creates_loop(best_memory, curr_replay_seq): 
-				
-				ak_best_anywhere = False 
-				for goal_state in goal_states:
-					if a_k == np.argmax(self.G[s_k, :, goal_state]):
-						ak_best_anywhere = True
-						break
-
-				if ak_best_anywhere: # ... and a_k is the best action for any given policy in s_k, add to seq
-					curr_replay_seq.append(best_memory)
-				else:
-					curr_replay_seq = [best_memory]
-			else:
-				curr_replay_seq = [best_memory]
-
-			backups.append(curr_replay_seq.copy())
-
-			# Learn and update policy
-			if len(curr_replay_seq) == 1:
-				self.learn(curr_replay_seq)
-			else:
-				self.multi_learn(curr_replay_seq)
-			
-		if verbose:
-			return np.array(replayed_experiences), (needs, gains, all_MEVBs), backups
-		else:
-			return np.array(replayed_experiences)
 
 	def dumb_replay(self, num_steps, return_seq=True):
 		'''
@@ -577,78 +499,6 @@ class GeodesicAgent(object):
 			gain += (pi_p[s_k, action] - pi[s_k, action]) * G_p[s_k, action, goal_state]
 		
 		return gain
-
-	def compute_multistep_EVB(self, transition, goal_state, policy, replay_seq, state=None, M=None, prospective=False):
-		'''
-			Compute the expected value of GR backup for a particular sequence of transitions
-			with respect to a particular goal state. Derivation for the factorization
-			EVB = need * gain follows from Mattar & Daw (2018), defining GR analogues
-			of Q and V functions.
-		'''
-		# Collect variables
-		s_k, a_k, s_kp = transition
-		s_m, a_m, s_mp = replay_seq[-1]
-		
-		if s_k == goal_state: # When navigating to goal state, don't care about transitions once I'm there
-			return self.min_gain, self.min_gain, self.min_gain
-
-		if state is None:
-			state = self.curr_state
-		if M is None:
-			M = self.compute_occupancy(policy, self.T)
-
-		# Compute EVB factors and evaluate
-		need = self.compute_need(state, s_k, M, prospective)
-
-		# If s_k is the terminal state of the most recent replay step, and a_k is the 
-		# optimal action in a_k, then we allow ourselves to "extend" this backup to all
-		# previous states in the replay sequence. Consequently, the gain term here is not
-		# just the usual gain for this memory, but the summed gain across all the memories
-		# in the sequence.
-		if s_mp == s_k and a_k == np.argmax(self.G[state, :, goal_state]):
-			gain = self.compute_multistep_gain(transition, goal_state, policy, replay_seq)
-		else:
-			gain = self.compute_gain(transition, goal_state, policy)
-
-		return (need, gain, need * gain)
-
-	def compute_multistep_gain(self, transition, goal_state, policy, replay_seq, prospective=False):
-		'''
-			Compute the multi-step gain term of the GR EVB equation. The gain of each
-			transition is updated using the n-step return from that transition to the
-			end of the full sequence.
-		'''
-
-		s_k, a_k, s_kp = transition
-
-		# Old policy
-		pi = policy
-
-		# Get the eligibility trace Geodesic update corresponding to this transition and replay_seq
-		G_p = self.G + self.compute_trace_Geodesic_update(transition, replay_seq)
-
-		# Separate processing of current transition and replay_seq due to pass-by-reference issues
-		gain = 0
-
-		# Check for new state policy
-		pi_p = self.update_state_policy(s_k, goal_state, G=G_p)
-
-		# Accumulate gain
-		for action in range(self.num_actions):
-			gain += (pi_p[s_k, action] - pi[s_k, action]) * G_p[s_k, action, goal_state]
-
-		# Now go through replay_seq 
-		for mdx, memory in reversed(list(enumerate(replay_seq))):
-			s_k, a_k, s_kp = memory
-
-			# New state policy
-			pi_p = self.update_state_policy(s_k, goal_state, G=G_p) 
-
-			# Accumulate gain
-			for action in range(self.num_actions):
-				gain += (pi_p[s_k, action] - pi[s_k, action]) * G_p[s_k, action, goal_state]
-		
-		return max(gain, self.min_gain)
 
 if __name__ == '__main__':
 	side_length = 3
