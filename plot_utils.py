@@ -79,7 +79,7 @@ def plot_traj(gridworld, state_sequence, cmap=None, ax=None, figsize=(12,12)):
 
 	return ax
 
-def plot_need_gain(gridworld, transitions, need, gain, MEVB, params={}):
+def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, params={}):
 	fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
 	## Need
@@ -143,7 +143,10 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, params={}):
 		succ_y, succ_x = np.array(oned_twod(s_kp, gridworld.width, gridworld.height)) + CENTRE_OFFSET
 
 		# Plot
-		if abs(np.max(norm_gain) - norm_gain[tdx]) < 1e-8: # Distinguish the maximal gain transitions
+		if specials is not None and transition in specials: # Custom distinction for a set of transitions
+			ax.arrow(start_x, start_y, succ_x - start_x, succ_y - start_y, 
+				  length_includes_head=True, head_width=0.25, color='k')
+		elif abs(np.max(norm_gain) - norm_gain[tdx]) < 1e-8: # Distinguish the maximal gain transitions
 			ax.arrow(start_x, start_y, succ_x - start_x, succ_y - start_y, 
 				  length_includes_head=True, head_width=0.25, color='r')
 		else:
@@ -175,7 +178,10 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, params={}):
 		succ_y, succ_x = np.array(oned_twod(s_kp, gridworld.width, gridworld.height)) + CENTRE_OFFSET
 
 		# Plot
-		if abs(np.max(norm_MEVB) - norm_MEVB[tdx]) < 1e-8: # Distinguish the eventually-chosen transition
+		if specials is not None and transition in specials: # Custom distinction for a set of transitions
+			ax.arrow(start_x, start_y, succ_x - start_x, succ_y - start_y, 
+				  length_includes_head=True, head_width=0.25, color='k')
+		elif abs(np.max(norm_MEVB) - norm_MEVB[tdx]) < 1e-8: # Distinguish the eventually-chosen transition
 			ax.arrow(start_x, start_y, succ_x - start_x, succ_y - start_y, 
 					  length_includes_head=True, head_width=0.25, color='r')
 		else:
