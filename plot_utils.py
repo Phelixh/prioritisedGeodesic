@@ -91,11 +91,14 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, para
 	# Grab boundaries
 	min_need = np.min(need[np.nonzero(need)]) # Dumb hack so that need = 0 states don't appear slightly red
 	max_need = np.max(need)
+	alpha_fac = 1
 
 	if 'min_need' in params.keys():
 		min_need = params['min_need']
 	if 'max_need' in params.keys():
 		max_need = params['max_need']
+	if 'alpha_fac' in params.keys():
+		alpha_fac = params['alpha_fac']
 
 	norm_need = mpl.colors.Normalize(vmin=min_need, vmax=max_need)(need)
 
@@ -135,7 +138,7 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, para
 
 	norm_gain = mpl.colors.Normalize(vmin=min_gain, vmax=max_gain)(gain)
 	gain_colours = plt.cm.winter(norm_gain).reshape(-1, 4)
-	gain_colours[:, 3] = norm_gain # Modulate alpha in accordance with gain as well
+	gain_colours[:, 3] = norm_gain / alpha_fac # Modulate alpha in accordance with gain as well
 	CENTRE_OFFSET = 0.5 # oned_twod gives the coordinate of the top left corner of the state
 	for tdx, transition in enumerate(transitions):
 		s_k, a_k, s_kp = transition
@@ -143,10 +146,7 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, para
 		succ_y, succ_x = np.array(oned_twod(s_kp, gridworld.width, gridworld.height)) + CENTRE_OFFSET
 
 		# Plot
-		if specials is not None and transition in specials: # Custom distinction for a set of transitions
-			ax.arrow(start_x, start_y, succ_x - start_x, succ_y - start_y, 
-				  length_includes_head=True, head_width=0.25, color='k')
-		elif abs(np.max(norm_gain) - norm_gain[tdx]) < 1e-8: # Distinguish the maximal gain transitions
+		if abs(np.max(norm_gain) - norm_gain[tdx]) < 1e-8: # Distinguish the maximal gain transitions
 			ax.arrow(start_x, start_y, succ_x - start_x, succ_y - start_y, 
 				  length_includes_head=True, head_width=0.25, color='r')
 		else:
@@ -170,7 +170,7 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, para
 
 	norm_MEVB = mpl.colors.Normalize(vmin=min_MEVB, vmax=max_MEVB)(MEVB)
 	MEVB_colours = plt.cm.winter(norm_MEVB).reshape(-1, 4)
-	MEVB_colours[:, 3] = norm_MEVB
+	MEVB_colours[:, 3] = norm_MEVB / alpha_fac
 	CENTRE_OFFSET = 0.5 # oned_twod gives the coordinate of the top left corner of the state
 	for tdx, transition in enumerate(transitions):
 		s_k, a_k, s_kp = transition

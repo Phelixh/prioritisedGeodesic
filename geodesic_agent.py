@@ -1,33 +1,51 @@
 import numpy as np
 from RL_utils import dynamics_policy_onestep
-import time
-import math
 
-# TODO: think about subtlety of setting EVB to 0 when s_kp == goal for n-step backups
-# TODO: think about partial updates in n-step backups
-# TODO: is (2, 0, 1) a valid predecessor to (1, 2, 2) in a multi-step backup? i.e., 
-#       do we allow self-paths?
+# TODO: think about zeroing out self-distances
+
 
 class GeodesicAgent(object):
-	'''
+	"""
 		The GeodesicAgent class solves MDPs using the Geodesic Representation (GR),
 		which is a control version of the Successor Representation (SR). Unlike the SR,
 		which develops a matrix of future state occupancy under a given policy, the GR
 		develops a matrix G[i, a, j] = gamma^d(i, a, j), where gamma is a discounting
-		factor and d(i, a, j) is the length of the shortest path from i to j after taking 
-		action a.
+		factor and d(i, a, j) is the length of the shortest path from `i` to `j` after taking
+		action `a`.
 
 		Unlike the SR, the GR can be used to solve navigation problems in the face of 
 		dynamic or uncertain environments.
-	'''
+	"""
 
-	def __init__(self, num_states, num_actions, goal_states, T, goal_dist=None, 
-				 s0_dist=None, alpha=0.3, gamma=0.95, min_gain=0):
+	def __init__(self, num_states: int, num_actions: int, goal_states: np.ndarray,
+				 T: np.ndarray,
+				 goal_dist: np.ndarray = None,
+				 s0_dist: np.ndarray = None,
+				 alpha: float = 0.3,
+				 gamma: float = 0.95,
+				 min_gain: float = 0):
+		"""
+		Construct the GeodesicAgent object.
+
+		Args:
+			num_states (int): Number of states in the underlying MDP
+			num_actions (int): Number of actions available at each state
+			goal_states (np.ndarray): A subset of states that are marked as "goals"
+			T (np.ndarray): The one-step transition matrix for the MDP.
+				T[s, a, g] gives the probability of transitioning from state s to state g after
+				taking action a.
+			goal_dist (np.ndarray): The distribution over which goals are most likely to manifest
+			s0_dist (np.ndarray): Initial state distribution
+			alpha (float): Learning rate
+			gamma (float): Temporal discount rate
+			min_gain (float): Minimum value for gain computation
+		"""
+
 		# MDP properties
 		self.num_states = num_states
 		self.num_actions = num_actions
 		self.goal_states = goal_states
-		self.curr_state = -1 # Pre-initial state indicating action has not yet started
+		self.curr_state = -1  # Pre-initial state indicating action has not yet started
 		if goal_dist is None:
 			goal_dist = np.ones(len(goal_states)) / len(goal_states)
 		self.goal_dist = goal_dist
@@ -35,24 +53,36 @@ class GeodesicAgent(object):
 		self.s0_dist = s0_dist
 
 		# Agent properties
-		self.alpha = alpha # Learning rate
+		self.alpha = alpha  # Learning rate
 		self.gamma = gamma
 		self.min_gain = min_gain
-		self.G = np.zeros((num_states, num_actions, num_states)) # Geodesic representation matrix is gamma^shortest_path
-		self.memory = [] # Memory bank for later replay
+		self.G = np.zeros(
+			(num_states, num_actions, num_states))  # Geodesic representation matrix is gamma^shortest_path
+		self.memory = []  # Memory bank for later replay
 
+		# Separate policies for each goal state, each initialised as uniform
 		uniform_policy = np.ones((num_states, num_actions)) / num_actions
-		self.policies = { goal_states[i] : uniform_policy.copy() for i in range(len(goal_states)) } # Separate policies for each goal state
-																				   					# Initialised each as uniform
+		self.policies = {goal_states[i]: uniform_policy.copy() for i in range(len(goal_states))}
 
 	def derive_policy(self, goal_state, G=None, set_policy=False, epsilon=0):
-		''' 
-			Derive the policy for reaching a given goal state. Since
-			the GR represents the shortest (expected) paths, we can 
-			simply take the max at every state.
+		"""
+		Derive the policy for reaching a given goal state. Since
+		the GR represents the shortest (expected) paths, we can
+		simply take the max at every state.
 
-			Allow an epsilon-greedy addition to facilitate exploration.
-		'''
+		Allow an epsilon-greedy addition to facilitate exploration.
+
+		Args:
+			goal_state (int): The goal with respect to which the policy is derived.
+			G (np.ndarray, optional): The Geodesic representation over which the policy is derived.
+				If none is provided, the agent's current one will be used.
+			set_policy (boolean): If True, the computed policy will update the agent's current policy
+				 for the specified goal.
+			epsilon (float): Epsilon parameter for epsilon-greedy action policy.
+
+		Returns:
+			policy (np.ndarray): The computed policy.
+		"""
 
 		# Allow arbitrary G to be fed in, default to current G
 		if G is None:
@@ -63,11 +93,11 @@ class GeodesicAgent(object):
 		# Compute policy
 		for state in range(self.num_states):
 			best_actions = np.flatnonzero(G[state, :, goal_state] == np.max(G[state, :, goal_state]))
-			num_best_actions = len(best_actions) # Split 1 - epsilon ties equally
+			num_best_actions = len(best_actions)  # Split 1 - epsilon ties equally
 
 			policy[state, :] = epsilon / self.num_actions
-			policy[state, best_actions] += (1 - epsilon) / num_best_actions # Deterministic for epsilon = 0
-			
+			policy[state, best_actions] += (1 - epsilon) / num_best_actions  # Deterministic for epsilon = 0
+
 		# Cache if wanted
 		if set_policy:
 			self.policies[goal_state] = policy
@@ -75,11 +105,23 @@ class GeodesicAgent(object):
 		return policy
 
 	def update_state_policy(self, state, goal_state, G=None, set_policy=False, epsilon=0):
-		''' 
-			Update the internal policy only for state `state`. 
+		"""
+		Update the internal policy only for a given state.
 
-			Allow an epsilon-greedy addition to facilitate exploration.
-		'''
+		Allow an epsilon-greedy addition to facilitate exploration.
+
+		Args:
+			state (int): The state receiving the policy update
+			goal_state (int): The state with respect to which the policy is being updated
+			G (np.ndarray, optional): The Geodesic representation over which the policy is derived.
+				If none is provided, the agent's current one will be used.
+			set_policy (boolean): If True, the computed policy will update the agent's current policy
+				 for the specified goal.
+			epsilon (float): Epsilon parameter for epsilon-greedy action policy.
+
+		Returns:
+			policy (np.ndarray): The computed policy.
+		"""
 
 		# Allow arbitrary G to be fed in, default to current G
 		if G is None:
@@ -87,14 +129,14 @@ class GeodesicAgent(object):
 
 		# Compute policy
 		best_actions = np.flatnonzero(G[state, :, goal_state] == np.max(G[state, :, goal_state]))
-		num_best_actions = len(best_actions) # Split 1 - epsilon ties equally
+		num_best_actions = len(best_actions)  # Split 1 - epsilon ties equally
 
-		if not set_policy: # Only re-copy the whole thing if we're not planning on saving it.
+		if not set_policy:  # Only re-copy the whole thing if we're not planning on saving it.
 			policy = self.policies[goal_state].copy()
 		else:
 			policy = self.policies[goal_state]
 
-		policy[state, :] = epsilon / self.num_actions # Deterministic for epsilon = 0
+		policy[state, :] = epsilon / self.num_actions  # Deterministic for epsilon = 0
 		policy[state, best_actions] += (1 - epsilon) / num_best_actions
 
 		# Cache if wanted
@@ -104,19 +146,45 @@ class GeodesicAgent(object):
 		return policy
 
 	def remember(self, transitions):
-		'''
-			Add a set of transitions to the memory bank.
-		'''
+		"""
+                Add a set of transitions to the memory bank.
+
+                Args:
+                    transitions (list): The list of memories to be added to the memory bank.
+                        Each memory must be a tuple (s, a, g), indicating that action a was
+                        taken in state s and reached state g.
+                """
 		for transition in transitions:
 			if transition not in self.memory:
 				self.memory.extend([transition])
 
-	def replay(self, num_steps, goal_states=None, goal_dist=None, prospective=False, verbose=False):
-		'''
-			Perform replay, prioritised under a (meta-) expected value of backup rule.
-			Do this by iterating over all available transitions in memory, and averaging
-			the EVBs over the list of potential future goal states.
-		'''
+	def replay(self, num_steps, goal_states=None, goal_dist=None, prospective=False, verbose=False,
+			   check_convergence=True, convergence_thresh=0.0):
+		"""
+		Perform replay, prioritised under a (meta-) expected value of backup rule.
+		Do this by iterating over all available transitions in memory, and averaging
+		the EVBs over the list of potential future goal states.
+
+		Args:
+			num_steps (int): Maximum number of steps of replay to be performed.
+			goal_states (np.ndarray): The set of particular goal states with respect to which replay should occur.
+			goal_dist (np.ndarray): The distribution weighting those goals.
+			prospective (boolean): Controls whether the agent plans prospectively or using their current state.
+				If prospective=False, the need term of EVB is computed with respect to the agent's current state.
+				If prospective=True, the need term of EVB is computed with respect to the agent's initial
+				state distribution.
+			verbose (boolean): Controls whether various intermediate variables are returned at the end of the process.
+			check_convergence (boolean): Controls whether replay can end early if the Geodesic representation has
+				converged.
+			convergence_thresh (float): Tolerance on absolute mean change in the GR for convergence.
+
+		Returns:
+			replay_seq (np.ndarray):
+			needs (np.ndarray):
+			gains (np.ndarray):
+			all_MEVBs (np.ndarray):
+			backups (np.ndarray):
+		"""
 		# Input validation, blah blah
 		if goal_states is None:
 			goal_states = self.goal_states
@@ -124,21 +192,23 @@ class GeodesicAgent(object):
 			goal_dist = self.goal_dist
 
 		# If verbose usage, build storage structures
+		needs = None
+		gains = None
+		all_MEVBs = None
 		if verbose:
 			needs = np.zeros((num_steps, len(goal_states), self.num_states, self.num_states))
 			gains = np.zeros((num_steps, len(goal_states), len(self.memory)))
 			all_MEVBs = np.zeros((num_steps, len(goal_states), len(self.memory)))
 
 		# Start replaying
-		replay_seq = [] # Maintain a list of replayed memories for use in multi-step backups
-		backups = [] # Maintain a list of transitions replayed in each backup step
+		replay_seq = []  # Maintain a list of replayed memories for use in multistep backups
+		backups = []  # Maintain a list of transitions replayed in each backup step
 		for step in range(num_steps):
-			MEVBs = np.zeros(len(self.memory)) # Best transition is picked greedily at each step
-			G_ps = {} # At each replay step, cache G primes since they are goal-invariant
+			MEVBs = np.zeros(len(self.memory))  # Best transition is picked greedily at each step
+			G_ps = {}  # At each replay step, cache G primes since they are goal-invariant
 
 			# Compute EVB for all transitions across all goal states
 			for gdx, goal in enumerate(goal_states):
-
 				# If we have a policy cached, grab it. Otherwise, recompute fully.
 				if goal in self.goal_states:
 					policy = self.policies[goal]
@@ -163,7 +233,7 @@ class GeodesicAgent(object):
 						G_ps[tdx] = G_p
 
 					need, gain, evb = self.compute_multistep_EVB(transition, goal, policy,
-																 replay_seq, 
+																 replay_seq,
 																 curr_state=self.curr_state,
 																 M=M_pi,
 																 G_p=G_p,
@@ -177,20 +247,35 @@ class GeodesicAgent(object):
 						gains[step, gdx, tdx] = gain
 
 			# Pick the best one
-			best_memory = self.memory[np.argmax(MEVBs)]
+			best_memories = np.argwhere(MEVBs == np.max(MEVBs)).flatten()
+			best_memory = self.memory[np.random.choice(best_memories)]
 			replay_seq.append(best_memory)
 
 			# Learn!
-			backups.append(self.nstep_learn(replay_seq))
+			if check_convergence:
+				backup, mag_delta = self.nstep_learn(replay_seq, ret_update_mag=True)
+				if mag_delta <= convergence_thresh:  # Reached convergence
+
+					# Cap the storage data structures, if necessary
+					if verbose:
+						needs = needs[:step, :, :, :]
+						gains = gains[:step, :, :]
+						all_MEVBs = all_MEVBs[:step, :, :]
+
+					break
+			else:
+				backup = self.nstep_learn(replay_seq)
+
+			backups.append(backup)
 
 		if verbose:
 			return np.array(replay_seq), (needs, gains, all_MEVBs), backups
 
-	def nstep_learn(self, transition_seq, update_policies=True):
-		'''
+	def nstep_learn(self, transition_seq, update_policies=True, ret_update_mag=False):
+		"""
 			Update GR according to transition sequence. Treat last transition in sequence
 			as primary transition.
-		'''
+		"""
 		dG, opt_subseqs = self.compute_nstep_update(transition_seq[-1], replay_seq=transition_seq[:-1])
 		self.G += self.alpha * dG
 
@@ -198,15 +283,18 @@ class GeodesicAgent(object):
 			for goal in self.goal_states:
 				self.policies[goal] = self.derive_policy(goal)
 
-		return opt_subseqs
+		if ret_update_mag:
+			return opt_subseqs, np.sum(self.alpha * np.abs(dG))
+		else:
+			return opt_subseqs
 
 	def compute_multistep_EVB(self, transition, goal, policy, replay_seq, curr_state, M, G_p=None, prospective=False):
-		'''
+		"""
 			Compute the expected value of GR backup for a particular sequence of transitions
 			with respect to a particular goal state. Derivation for the factorization
 			EVB = need * gain follows from Mattar & Daw (2018), defining GR analogues
 			of Q and V functions.
-		'''
+		"""
 		# Collect variables
 		s_k, a_k, s_kp = transition
 
@@ -224,27 +312,26 @@ class GeodesicAgent(object):
 		# Compute and return EVB + factors
 		return need, gain, need * gain
 
-	def get_optimal_subseq(self, replay_seq, goal, tol=1e-6, end=None, t=None):
-		'''
+	def get_optimal_subseq(self, replay_seq, goal, tol=1e-6, end=None):
+		"""
 			Compute the longest subsequence (starting from the end) in replay_seq that constitutes
 			an optimal path towards goal under the given policy.
-		'''	
-		if end == goal: # Special case
+		"""
+		if end == goal:  # Special case
 			return []
 
 		optimal_subseq = []
 		for tdx, transition in enumerate(reversed(replay_seq)):
 			s_k, a_k, s_kp = transition
 
-			if tdx == 0 and s_kp != end: # We require that the sequence conclude at state end
+			if tdx == 0 and s_kp != end:  # We require that the sequence conclude at state end
 				break
 
-
-			if s_k == goal: # Self-trajectories from the goal, to the goal, are somewhat ill-defined
+			if s_k == goal:  # Self-trajectories from the goal, to the goal, are somewhat ill-defined
 				break
- 
+
 			# If a_k is optimal in s_k...
-			if abs(self.G[s_k, a_k, goal] - np.max(self.G[s_k, :, goal])) < tol: 
+			if self.check_optimal(s_k, a_k, goal, tol=tol):
 				# ... and also, it leads to the first member of the optimal subsequence...
 				if not optimal_subseq or s_kp == optimal_subseq[0][0]:
 					# then add it to the optimal subsequence.
@@ -259,12 +346,12 @@ class GeodesicAgent(object):
 		return optimal_subseq
 
 	def compute_nstep_update(self, transition, replay_seq=None, optimal_subseqs=None, goal_states=None):
-		'''
+		"""
 			Given a primary transition and a potentially-empty subsequence of transitions leading to it,
 			compute what the net update to the GR is.
 
 			Either one of replay_seq or optimal_subseq must be provided.
-		'''
+		"""
 		# Collect variables
 		s_k, a_k, s_kp = transition
 		dG = np.zeros_like(self.G)
@@ -288,35 +375,38 @@ class GeodesicAgent(object):
 			# Find optimal subsequence wrt this goal
 			if optimal_subseqs is not None:
 				optimal_subseq = optimal_subseqs[gdx]
-				computed_subseqs[goal] = optimal_subseq
+			elif not self.check_optimal(s_k, a_k, goal):  # Exploratory actions do not backpropagate
+				optimal_subseq = []
 			else:
-				optimal_subseq = self.get_optimal_subseq(replay_seq, goal, end=s_k, t=transition)
-				computed_subseqs[goal] = optimal_subseq
+				optimal_subseq = self.get_optimal_subseq(replay_seq, goal, end=s_k)
+
+			computed_subseqs[goal] = optimal_subseq
 
 			# Backpropagate delta throughout this subsequence as relevant
-			for mdx, memory in enumerate(optimal_subseq):
+			for mdx, memory in enumerate(reversed(optimal_subseq)):
 				s_m, a_m, s_mp = memory
 				dG[s_m, a_m, goal] += (self.gamma ** (mdx + 1)) * GR_delta
 
 		return dG, computed_subseqs
 
+	def check_optimal(self, s_k, a_k, goal, tol=1e-6):
+		return abs(self.G[s_k, a_k, goal] - np.max(self.G[s_k, :, goal])) <= tol
+
 	def compute_nstep_gain(self, transition, replay_seq, goal, policy, G_p=None, optimal_subseq=None):
-		'''
+		"""
 			Compute gain blah
-		'''
+		"""
 
 		# Collect variables
 		s_k, a_k, s_kp = transition
 
 		# Get optimal subsequence of replay_seq with respect to goal
 		if optimal_subseq is None:
-			optimal_subseq = self.get_optimal_subseq(replay_seq, goal, end=s_k, t=transition)
+			optimal_subseq = self.get_optimal_subseq(replay_seq, goal, end=s_k)
 
 		# Compute new GR given this primary transition + optimal subsequence
-		if G_p is None: 
-			dG, _ = self.compute_nstep_update(transition, optimal_subseqs=[optimal_subseq],
-											  goal_states=[goal])
-
+		if G_p is None:
+			dG, _ = self.compute_nstep_update(transition, optimal_subseqs=[optimal_subseq], goal_states=[goal])
 			G_p = self.G.copy() + self.alpha * dG
 
 		## Compute gain
@@ -336,34 +426,21 @@ class GeodesicAgent(object):
 
 		return gain
 
-	def dumb_replay(self, num_steps, return_seq=True):
-		'''
-			Dumb replay is dumb. Uniformly sample at random from memory and replay what you get 
-		'''
-		replayed_experiences = []
-		for i in range(num_steps):
-			memory = np.random.choice(self.memory)
-			self.learn([memory])
-			replayed_experiences.append(memory)
-
-		if return_seq:
-			return replayed_experiences
-
 	def compute_need(self, state, s_k, M, prospective=False):
-		'''
+		"""
 			Compute the need term of the GR EVB equation.
-		'''
-		
-		if prospective: # Average needs across all possible start states
+		"""
+
+		if prospective:  # Average needs across all possible start states
 			return np.average(M[:, s_k], weights=self.s0_dist)
 		else:
 			return M[state, s_k]
 
 	def compute_occupancy(self, policy, T):
-		'''
+		"""
 			Compute future state occupancy matrix given a policy `policy`
 			and transition dynamics matrix `T`
-		'''
+		"""
 		# Convert dynamics + policy to one-step transition matrix
 		one_step_T = dynamics_policy_onestep(policy, T)
 
@@ -372,47 +449,6 @@ class GeodesicAgent(object):
 
 		return M
 
+
 if __name__ == '__main__':
-	side_length = 3
-	num_states = side_length ** 2
-	num_actions = 4
-	uga = GeodesicAgent(num_states, num_actions, [0], gamma=0.9)
-
-	# Build transition bank to learn G
-	transitions = []
-	for state in range(num_states):
-		for action in range(num_actions):
-			state_2d = np.unravel_index(state, (side_length, side_length))
-
-			if action == 0: # Go left
-				if state_2d[1] == 0: # Already at left border
-					succ_state = state
-				else:
-					succ_state = state - 1
-
-			if action == 1: # Go up
-				if state_2d[0] == 0: # Already at top border
-					succ_state = state
-				else:
-					succ_state = state - side_length
-
-			if action == 2: # Go right
-				if state_2d[1] == side_length - 1: # Already at right border
-					succ_state = state
-				else:
-					succ_state = state + 1
-
-			if action == 3: # Go down
-				if state_2d[0] == side_length - 1: # Already at bottom border
-					succ_state = state
-				else:
-					succ_state = state + side_length
-
-			transitions.append((state, action, succ_state))
-
-	num_learning_iterations = 1000
-	for _ in range(num_learning_iterations):
-		uga.learn(transitions)
-
-	print(uga.G[0,2,2])
-	print(uga.derive_policy(0))
+	pass

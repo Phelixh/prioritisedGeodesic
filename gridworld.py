@@ -330,6 +330,32 @@ class Bottleneck(GridWorld):
 
 		return experiences
 
+	def get_valid_states(room_width, corridor_width, height):
+		corr_row = int(height // 2) # Integer division, hopefully
+		width = 2 * room_width + corridor_width
+
+		# Build valid states
+		valid_states = []
+
+		# States above tunnel
+		for i in range(height):
+			# Tunnel
+			if i == corr_row:
+				all_states = np.arange(i * width, (i + 1) * width)
+				valid_states.extend(list(all_states))
+			else:
+				# Left room
+				left_states = np.arange(i * width, i * width + room_width)
+				valid_states.extend(list(left_states))
+
+				# Right room
+				start = (i * width) + room_width + corridor_width
+				end = (i + 1) * width
+				right_states = np.arange(start, end)
+				valid_states.extend(list(right_states))
+
+		return valid_states
+
 class LinearChamber(GridWorld):
 	'''
 		Specific class for a linear chamber GridWorld -- just a height 1 rectangle. Defaults the start position
