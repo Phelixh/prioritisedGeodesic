@@ -2,6 +2,7 @@ import numpy as np
 from RL_utils import dynamics_policy_onestep
 
 # TODO: think about zeroing out self-distances
+# TODO: need term should be occupancy in the modified self-looped MDP not the true MDP
 
 
 class GeodesicAgent(object):
@@ -63,6 +64,16 @@ class GeodesicAgent(object):
 		# Separate policies for each goal state, each initialised as uniform
 		uniform_policy = np.ones((num_states, num_actions)) / num_actions
 		self.policies = {goal_states[i]: uniform_policy.copy() for i in range(len(goal_states))}
+
+		# Separate transition structures for each of the modified MDPs, one per goal
+		self.mod_Ts = {}
+		for i in range(len(goal_states)):
+			mod_T = self.T.copy()
+			goal = goal_states[i]
+			mod_T[goal, :, :] = 0
+			mod_T[goal, :, goal] = 1
+
+			self.mod_Ts[goal_states[i]] = mod_T
 
 	def derive_policy(self, goal_state, G=None, set_policy=False, epsilon=0):
 		"""
@@ -159,7 +170,7 @@ class GeodesicAgent(object):
 				self.memory.extend([transition])
 
 	def replay(self, num_steps, goal_states=None, goal_dist=None, prospective=False, verbose=False,
-			   check_convergence=True, convergence_thresh=0.0):
+			   check_convergence=True, convergence_thresh=0.0, otol=1e-6, learn_seq=None):
 		"""
 		Perform replay, prioritised under a (meta-) expected value of backup rule.
 		Do this by iterating over all available transitions in memory, and averaging
@@ -177,6 +188,9 @@ class GeodesicAgent(object):
 			check_convergence (boolean): Controls whether replay can end early if the Geodesic representation has
 				converged.
 			convergence_thresh (float): Tolerance on absolute mean change in the GR for convergence.
+			otol (float): Ties in EVB are broken randomly. Otol defines the threshold for a tie.
+			learn_seq (list): If provided, learn_seq stipulates the sequence of state to be replayed. All the EVB
+				metrics are still computed for analysis purposes, but the outcome is ignored.
 
 		Returns:
 			replay_seq (np.ndarray):
@@ -192,11 +206,13 @@ class GeodesicAgent(object):
 			goal_dist = self.goal_dist
 
 		# If verbose usage, build storage structures
-		needs = None
+		state_needs = None
+		transition_needs = None
 		gains = None
 		all_MEVBs = None
 		if verbose:
-			needs = np.zeros((num_steps, len(goal_states), self.num_states, self.num_states))
+			state_needs = np.zeros((num_steps, len(goal_states), self.num_states, self.num_states))
+			transition_needs = np.zeros((num_steps, len(goal_states), len(self.memory)))
 			gains = np.zeros((num_steps, len(goal_states), len(self.memory)))
 			all_MEVBs = np.zeros((num_steps, len(goal_states), len(self.memory)))
 
@@ -216,11 +232,11 @@ class GeodesicAgent(object):
 					policy = self.derive_policy(goal)
 
 				# Compute SR induced by this policy and the task dynamics
-				M_pi = self.compute_occupancy(policy, self.T)
+				M_pi = self.compute_occupancy(policy, self.mod_Ts[goal])
 
 				# Log, if wanted
 				if verbose:
-					needs[step, gdx, :, :] = M_pi
+					state_needs[step, gdx, :, :] = M_pi
 
 				# Compute EVB for each transition
 				for tdx, transition in enumerate(self.memory):
@@ -245,22 +261,27 @@ class GeodesicAgent(object):
 					if verbose:
 						all_MEVBs[step, gdx, tdx] = evb
 						gains[step, gdx, tdx] = gain
+						transition_needs[step, gdx, tdx] = need
 
 			# Pick the best one
-			best_memories = np.argwhere(MEVBs == np.max(MEVBs)).flatten()
-			best_memory = self.memory[np.random.choice(best_memories)]
+			if learn_seq:
+				best_memory = learn_seq[step]
+			else:
+				best_memories = np.argwhere(np.abs(MEVBs - np.max(MEVBs)) <= otol).flatten()
+				best_memory = self.memory[np.random.choice(best_memories)]
+
 			replay_seq.append(best_memory)
 
 			# Learn!
 			if check_convergence:
 				backup, mag_delta = self.nstep_learn(replay_seq, ret_update_mag=True)
 				if mag_delta <= convergence_thresh:  # Reached convergence
-
 					# Cap the storage data structures, if necessary
 					if verbose:
-						needs = needs[:step, :, :, :]
+						state_needs = state_needs[:step, :, :, :]
 						gains = gains[:step, :, :]
 						all_MEVBs = all_MEVBs[:step, :, :]
+						transition_needs = transition_needs[:step, :, :]
 
 					break
 			else:
@@ -269,7 +290,7 @@ class GeodesicAgent(object):
 			backups.append(backup)
 
 		if verbose:
-			return np.array(replay_seq), (needs, gains, all_MEVBs), backups
+			return np.array(replay_seq), (state_needs, transition_needs, gains, all_MEVBs), backups
 
 	def nstep_learn(self, transition_seq, update_policies=True, ret_update_mag=False):
 		"""
@@ -362,7 +383,6 @@ class GeodesicAgent(object):
 		# For each goal...
 		computed_subseqs = {}
 		for gdx, goal in enumerate(goal_states):
-
 			# Compute GR delta wrt this goal
 			if s_kp == goal:
 				GR_delta = 1 - self.G[s_k, a_k, goal]
