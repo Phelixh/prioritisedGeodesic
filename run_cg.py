@@ -11,9 +11,9 @@ from graph import CommunityGraph
 # Reproducibility
 np.random.seed(865612)
 
-## Community graph, a la Anna Schapiro
-# Store?
-save = True
+## Community graph, à la Anna Schapiro
+save = True     # Store?
+partial = False  # Imbue agent with partial initial knowledge of the environment?
 
 # Physics
 num_nbrhds = 3
@@ -39,7 +39,7 @@ some_goals = np.array([2, 7, 12])  # One state per neighbourhood is a goal
 goal_states = [one_goal, some_goals, all_goals]
 
 ## Agent parameters
-alpha = 1.0   # Learning rate
+alpha = 0.30  # Learning rate
 gamma = 0.95  # Temporal discounting
 num_replay_steps = 500
 
@@ -60,15 +60,28 @@ for i in range(len(init_state_dists)):
         ga.curr_state = 0
         ga.remember(all_experiences)  # Preload our agent with all possible memories
 
+        if partial:
+            num_iters = 500
+            partial_G = cg.separate_GR(num_iters, gamma)
+            ga.initialize_GR(partial_G)
+
         ## Run replay
         check_convergence = False
         conv_thresh = 1e-8
         replayed_exps, stats_for_nerds, backups = ga.replay(num_steps=num_replay_steps, verbose=True, prospective=True,
-                                                            check_convergence=check_convergence, convergence_thresh=conv_thresh)
+                                                            check_convergence=check_convergence,
+                                                            convergence_thresh=conv_thresh)
         needs, trans_needs, gains, all_MEVBs = stats_for_nerds
 
         # Save
-        if save:
-            np.savez('Data/cg_%dc_%dn_%d_%d.npz' % (num_nbrs, num_nbrhds, i, j), replay_seqs=replayed_exps, needs=needs,
-                     gains=gains, all_MEVBs=all_MEVBs, trans_needs=trans_needs, backups=backups, num_nbrhds=num_nbrhds,
-                     num_nbrs=num_nbrs, num_states=num_states, alpha=alpha, gamma=gamma, memories=all_experiences)
+        if save and partial:
+            np.savez('Data/cg_partial_%dc_%dn_%.2f_%d_%d.npz' % (num_nbrs, num_nbrhds, alpha, i, j),
+                     replay_seqs=replayed_exps, needs=needs, gains=gains, all_MEVBs=all_MEVBs, trans_needs=trans_needs,
+                     backups=backups, num_nbrhds=num_nbrhds, num_nbrs=num_nbrs, num_states=num_states, alpha=alpha,
+                     gamma=gamma, memories=all_experiences)
+
+        if save and not partial:
+            np.savez('Data/cg_empty_%dc_%dn_%.2f_%d_%d.npz' % (num_nbrs, num_nbrhds, alpha, i, j),
+                     replay_seqs=replayed_exps, needs=needs, gains=gains, all_MEVBs=all_MEVBs, trans_needs=trans_needs,
+                     backups=backups, num_nbrhds=num_nbrhds, num_nbrs=num_nbrs, num_states=num_states, alpha=alpha,
+                     gamma=gamma, memories=all_experiences)

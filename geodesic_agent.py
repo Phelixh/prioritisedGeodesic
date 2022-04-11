@@ -75,6 +75,24 @@ class GeodesicAgent(object):
 
 			self.mod_Ts[goal_states[i]] = mod_T
 
+	def initialize_GR(self, new_G, update_policies=True):
+		"""
+		Replace the agent's current Geodesic representation with a new one. Optionally,
+		update all of its policies to be consistent with this new GR.
+
+		Args:
+			new_G (np.ndarray): The new Geodesic representation.
+			update_policies (boolean): If True, the agent will also update its policies to be consistent
+				with the new GR.
+
+		Returns:
+			None
+		"""
+		self.G = new_G.copy()
+		if update_policies:
+			for goal in self.goal_states:
+				self.derive_policy(goal, set_policy=True)
+
 	def derive_policy(self, goal_state, G=None, set_policy=False, epsilon=0):
 		"""
 		Derive the policy for reaching a given goal state. Since
