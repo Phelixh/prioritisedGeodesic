@@ -17,8 +17,14 @@ class MarkovDecisionProcess(object):
 
 	def __init__(self, transitions, num_actions, init_state_distribution=None):
 		"""
-			Initialize MarkovDecisionProcess object with environment parameters.
+		Initialize the MarkovDecisionProcess object with the relevant environment parameters.
+
+		Args:
+			transitions (np.ndarray): Transition matrix for the underlying MDP, T[s, a, g] = P(g | s, a)
+			num_actions (int): Number of actions available at each state for the MDP.
+			init_state_distribution (np.ndarray): Distribution over initial states for any given MDP episode.
 		"""
+
 		self.num_states = transitions.shape[0]
 		self.num_actions = num_actions
 		self.transitions = transitions
@@ -30,7 +36,18 @@ class MarkovDecisionProcess(object):
 
 	def sample_trajectories(self, num_trajectories, length, policy, reward_vector=None):
 		"""
-			Sample `num_trajectories` trajectories of length `length`, using policy `policy`.
+		Sample multiple trajectories of a given length by simulating a policy on the MDP.
+
+		Args:
+			num_trajectories (int): Number of trajectories to simulate.
+			length (int): Length of each trajectory.
+			policy (np.ndarray): Behavioural policy for the agent. Shape: (num_states, num_actions)
+			reward_vector (np.ndarray): Vector describing the reward associated with each state.
+
+		Returns:
+			state_seqs (np.ndarray): Sequences of states visited across all trajectories.
+			action_seqs (np.ndarray): Sequences of actions taken across all trajectories.
+			reward_seqs (np.ndarray): Sequences of rewards received across all trajectories.
 		"""
 		state_seqs = np.zeros((num_trajectories, length), dtype=int)
 		action_seqs = np.zeros((num_trajectories, length), dtype=int)  # last action is meaningless
@@ -46,7 +63,17 @@ class MarkovDecisionProcess(object):
 
 	def sample_trajectory(self, length, policy, reward_vector=None):
 		"""
-			Sample 1 trajectory of length `length`, using policy `policy`.
+		Sample one trajectory of a given length by simulating a policy on the MDP.
+
+		Args:
+			length (int): Length of the trajectory.
+			policy (np.ndarray): Behavioural policy for the agent. Shape: (num_states, num_actions)
+			reward_vector (np.ndarray): Vector describing the reward associated with each state.
+
+		Returns:
+			state_seq (np.ndarray): Sequence of states visited.
+			action_seq (np.ndarray): Sequence of actions taken.
+			reward_seq (np.ndarray): Sequence of rewards received.
 		"""
 		state_seq = np.zeros(length, dtype=int)
 		action_seq = np.zeros(length, dtype=int)
@@ -69,11 +96,25 @@ class MarkovDecisionProcess(object):
 
 	def sample_initial_state(self):
 		"""
-			Sample the initial state distribution to pick an initial state.
+		Sample the initial state distribution to pick an initial state.
 		"""
 		return np.random.choice(self.num_states, p=self.s0_dist)
 
 	def step(self, state, policy=None, action=None, reward_vector=None):
+		"""
+		Execute a single step of the MDP simulation process. Either a specific action must be provided,
+		or a policy from which an action may be selected.
+
+		Args:
+			state (int): The agent's current state.
+			policy (np.ndarray): The agent's behavioural policy. Shape: (num_states, num_actions)
+			action (int): The action the agent has taken.
+			reward_vector (np.ndarray): Vector describing the reward associated with each state.
+
+		Returns:
+			(action), next_state, reward: The results of executing this step of the MDP. The action is optionally
+				returned only when the user has provided a policy instead of an action directly.
+		"""
 		assert(policy is not None or action is not None), 'Buddy, you gotta give me at least an action or a policy.'
 
 		if reward_vector is None:
@@ -87,7 +128,16 @@ class MarkovDecisionProcess(object):
 
 	def perform_action(self, state, action, reward_vector=None):
 		"""
-			Perform action `action` in state `state`, and observe the resultant state and reward.
+		Perform an action in a state, observe the resultant state and reward.
+
+		Args:
+			state (int): The agent's current state.
+			action (int): The action undertaken by the agent.
+			reward_vector (np.ndarray): Vector describing the reward associated with each state.
+
+		Returns:
+			next_state (int): The successor state observed after taking the action.
+			reward (float): The received reward.
 		"""
 		next_state = np.random.choice(self.num_states, p=self.transitions[state, action, :])
 		if reward_vector is not None:
@@ -99,8 +149,17 @@ class MarkovDecisionProcess(object):
 
 	def execute_policy(self, state, policy, reward_vector=None):
 		"""
-			Execute policy `policy` in state `state` and return the resultant action, successor state
-			and reward.
+		Execute a policy in a given state.
+
+		Args:
+			state (int): The agent's current state.
+			policy (np.ndarray): The agent's behavioural policy. Shape: (num_states, num_actions)
+			reward_vector (np.ndarray): Vector describing the reward associated with each state.
+
+		Returns:
+			action (int): The action sampled from the policy.
+			next_state (int): The successor state observed after taking the action.
+			reward (float): The received reward.
 		"""
 		action = np.random.choice(self.num_actions, p=policy)
 		next_state, reward = self.perform_action(state, action, reward_vector)

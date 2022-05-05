@@ -10,6 +10,14 @@ class DiGraph(MarkovDecisionProcess):
 	"""
 
 	def __init__(self, num_vertices, edges, init_state_dist=None):
+		"""
+		Initialize the DiGraph.
+
+		Args:
+			num_vertices (int): Number of vertices in the graph.
+			edges (np.ndarray): Matrix describing graph connectivity: edges[source, action] = target.
+			init_state_dist (np.ndarray): Initial state distribution.
+		"""
 		# Convert graph specification to MDP
 		num_states = num_vertices
 		num_actions = edges.shape[1]
@@ -36,6 +44,14 @@ class CommunityGraph(DiGraph):
 	"""
 
 	def __init__(self, num_neighbourhoods, neighbourhood_size, init_state_dist=None):
+		"""
+		Initialize the CommunityGraph object.
+
+		Args:
+			num_neighbourhoods (int): Number of neighbourhoods in the community.
+			neighbourhood_size (int): Number of citizens per neighbourhood.
+			init_state_dist (np.ndarray): Initial state distribution for the MDP.
+		"""
 		num_vertices = num_neighbourhoods * neighbourhood_size
 
 		# Transitions to all the neighbours + attempt to hop to other neighbourhood
@@ -71,9 +87,28 @@ class CommunityGraph(DiGraph):
 
 	@staticmethod
 	def nbr_to_vtx(nbr, nbrhd, neighbourhood_size):
+		"""
+		Convert "neighbourhood ID" (i.e., the tuple of neighbourhood ID and neighbour ID) into a graph vertex
+		ID.
+
+		Args:
+			nbr (int): ID within neighbourhood.
+			nbrhd (int): Neighbourhood ID.
+			neighbourhood_size (int): Size of all neighbourhoods.
+
+		Returns:
+			Graph vertex id (int).
+
+		"""
 		return neighbourhood_size * nbrhd + nbr 
 
 	def get_all_transitions(self):
+		"""
+		Returns all available transitions within the CommunityGraph.
+
+		Returns:
+			Ts (list): A list of all valid transitions within the CommunityGraph.
+		"""
 		Ts = []
 		for src_id in range(self.num_states):
 			for action in range(self.num_actions):
