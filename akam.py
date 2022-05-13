@@ -37,7 +37,7 @@ for i in range(num_states):
         elif action == 3 and i + width < num_states:  # blocking up
             walls.append((i + width, 1))
 
-# Add extra walls to probe bottlenecking
+# Add extra walls to probe bottlenecks
 for i in range(height):
     if i == 5:
         continue
@@ -61,19 +61,17 @@ init_state_dist[0] = 1  # Top-left
 # init_state_dist = np.ones(num_states) / num_states
 
 # Goals
-num_goals = 7
-possible_goals = np.random.choice(num_states, size=7, replace=False)
-possible_goals = np.append(possible_goals, width - 1)
-init_goal_dist = np.zeros(num_states)
-init_goal_dist[possible_goals[0]] = 1
-all_goals = np.arange(num_states)
+num_goals = 8
+possible_goals = np.random.choice(num_states, size=num_goals - 1, replace=False)
+possible_goals = np.sort(np.append(possible_goals, width - 1))
+init_goal_dist = np.zeros(num_goals)
+init_goal_dist[-1] = 1
 
 p_goal_stay = 0.90
-goal_transition_mat = np.eye(num_states)
+goal_transition_mat = np.eye(num_goals)
 for i in range(num_goals):
-    goal = possible_goals[i]
-    goal_transition_mat[goal, possible_goals] = (1 - p_goal_stay) / (num_goals - 1)
-    goal_transition_mat[goal, goal] = p_goal_stay
+    goal_transition_mat[i, :] = (1 - p_goal_stay) / (num_goals - 1)
+    goal_transition_mat[i, i] = p_goal_stay
 
 # Agent parameters
 alpha = 0.30  # Learning rate
@@ -85,22 +83,21 @@ num_replay_steps = 50
 all_experiences = arena.get_all_transitions()
 T = arena.transitions
 
-ga = GeodesicAgent(num_states, arena.num_actions, all_goals, T, alpha=alpha, gamma=gamma, s0_dist=init_state_dist)
+ga = GeodesicAgent(num_states, arena.num_actions, possible_goals, T, alpha=alpha, gamma=gamma, s0_dist=init_state_dist)
 ga.curr_state = 0
 ga.remember(all_experiences)  # Preload our agent with all possible memories
 
 # Replay
 check_convergence = False
 conv_thresh = 1e-8
-replayed_exps, stats_for_nerds, backups = ga.dynamic_replay(num_replay_steps, goal_transition_mat,
+replayed_exps, stats_for_nerds, backups = ga.dynamic_replay(num_replay_steps, possible_goals, goal_transition_mat,
                                                             init_goal_dist, prospective=True, verbose=True,
                                                             check_convergence=check_convergence, otol=conv_thresh)
 state_needs, transition_needs, gains, all_MEVBs, all_DEVBs = stats_for_nerds
 
 if save:
-    np.savez('Data/akam_onestart_0.30.npz',
+    np.savez('Data/akam_onestart_%.2f.npz' % alpha,
              replay_seqs=replayed_exps, state_needs=state_needs, gains=gains, all_MEVBs=all_MEVBs,
              trans_needs=transition_needs, all_DEVBs=all_DEVBs,
              backups=backups, num_states=num_states, alpha=alpha, gamma=gamma, memories=all_experiences,
              walls=walls, width=width, height=height, arena=arena, possible_goals=possible_goals)
-

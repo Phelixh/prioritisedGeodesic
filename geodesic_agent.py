@@ -70,7 +70,7 @@ class GeodesicAgent(object):
 			mod_T[goal, :, :] = 0
 			mod_T[goal, :, goal] = 1
 
-			self.mod_Ts[goal_states[i]] = mod_T
+			self.mod_Ts[goal] = mod_T
 
 	def initialize_GR(self, new_G, update_policies=True):
 		"""
@@ -173,16 +173,33 @@ class GeodesicAgent(object):
 
 	def remember(self, transitions):
 		"""
-                Add a set of transitions to the memory bank.
+			Add a set of transitions to the memory bank.
 
-                Args:
-                    transitions (list): The list of memories to be added to the memory bank.
-                        Each memory must be a tuple (s, a, g), indicating that action a was
-                        taken in state s and reached state g.
-                """
+			Args:
+				transitions (list): The list of memories to be added to the memory bank.
+					Each memory must be a tuple (s, a, g), indicating that action a was
+					taken in state s and reached state g.
+        """
 		for transition in transitions:
 			if transition not in self.memory:
 				self.memory.extend([transition])
+
+	def forget(self, transitions, verbose=False):
+		"""
+			Remove a set of transitions from the memory bank.
+
+			Args:
+				transitions (list): The list of memories to be removed from the memory bank.
+					Each memory must be a tuple (s, a, g), indicating that action a was
+					taken in state s and reached state g.
+				verbose (boolean): If set to True, forget() will print a message indicating if a transition
+					was not found in memory.
+		"""
+		for transition in transitions:
+			if transition in self.memory:
+				self.memory.remove(transition)
+			elif verbose:
+				print('transition', transition, ' not located in memory.')
 
 	def compute_EVB_vector(self, goal_states, replay_seq, prospective=False, verbose=False):
 		"""
@@ -361,7 +378,7 @@ class GeodesicAgent(object):
 		if verbose:
 			return np.array(replay_seq), (state_needs, transition_needs, gains, all_MEVBs), backups
 
-	def dynamic_replay(self, num_steps, goal_dynamics, init_goal_dist, prospective=False,
+	def dynamic_replay(self, num_steps, goal_states, goal_dynamics, init_goal_dist, prospective=False,
 					   verbose=False, check_convergence=True, convergence_thresh=0.0, otol=1e-6, learn_seq=None):
 		"""
 		Perform replay prioritized under a regime where the goal evolves through some dynamics process, described
@@ -378,6 +395,7 @@ class GeodesicAgent(object):
 
 		Args:
 			num_steps (int): Maximum number of steps of replay to be performed.
+			goal_states (list): The list of possible goal states.
 			goal_dynamics (np.ndarray): Matrix describing the goal evolution process.
 			init_goal_dist (np.ndarray): The initial distribution over goal activation.
 			prospective (boolean): Controls whether the agent plans prospectively or using their current state.
@@ -405,8 +423,6 @@ class GeodesicAgent(object):
 			backups (list): The full list of backed-up states, on every step of replay. Includes auxiliary states
 				updated through multistep backups.
 		"""
-		goal_states = np.arange(self.num_states)
-
 		# If verbose usage, build storage structures
 		state_needs = None
 		transition_needs = None
@@ -423,6 +439,7 @@ class GeodesicAgent(object):
 		# Start replaying
 		replay_seq = []  # Maintain a list of replayed memories for use in multistep backups
 		backups = []  # Maintain a list of transitions replayed in each backup step
+		weights = np.linalg.inv(np.eye(len(goal_states)) - self.gamma * goal_dynamics) @ init_goal_dist
 		for step in range(num_steps):
 			out = self.compute_EVB_vector(goal_states, replay_seq, prospective, verbose)
 			if verbose:
@@ -434,8 +451,7 @@ class GeodesicAgent(object):
 			else:
 				MEVBs = out
 
-			# Compute the dynamic EVB, using the identity in the description
-			weights = np.linalg.inv(np.eye(self.num_states) - self.gamma * goal_dynamics) @ init_goal_dist
+			# Compute the dynamic EVB, using the identity in the function docstring
 			DEVBs = np.dot(weights, MEVBs)
 
 			# Log
