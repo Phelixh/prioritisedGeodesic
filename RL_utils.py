@@ -54,3 +54,19 @@ def is_malformed_policy(policy):
 			return True
 
 	return False
+
+
+def softmax(vals, temperature):
+	"""
+	Compute a probability distribution over actions using the softmax rule.
+
+	Args:
+		vals (array-like): Array of Q-values.
+		temperature (float): Softmax temperature.
+
+	Returns:
+		Action probabilities.
+	"""
+
+	nums = np.exp(vals / temperature)
+	return nums / np.sum(nums)

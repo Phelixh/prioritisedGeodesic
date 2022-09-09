@@ -1,5 +1,5 @@
 import numpy as np
-from RL_utils import dynamics_policy_onestep
+from RL_utils import dynamics_policy_onestep, softmax
 
 
 class GeodesicAgent(object):
@@ -179,7 +179,7 @@ class GeodesicAgent(object):
 				transitions (list): The list of memories to be added to the memory bank.
 					Each memory must be a tuple (s, a, g), indicating that action a was
 					taken in state s and reached state g.
-        """
+		"""
 		for transition in transitions:
 			if transition not in self.memory:
 				self.memory.extend([transition])
@@ -201,7 +201,53 @@ class GeodesicAgent(object):
 			elif verbose:
 				print('transition', transition, ' not located in memory.')
 
-	def compute_EVB_vector(self, goal_states, replay_seq, prospective=False, verbose=False):
+	def basic_learn(self, transition, goal_states=None, decay_rate=None, noise=0, update_policies=True):
+		"""
+			One-step transition learning, with forgetting.
+
+			Args:
+				transition ():
+				goal_states ():
+				decay_rate ():
+				noise ():
+				update_policies():
+		"""
+		if decay_rate is None:
+			decay_rate = 1  # No forgetting
+
+		s_k, a_k, s_kp = transition
+		dG = np.zeros_like(self.G)
+		mG = np.ones_like(self.G) * decay_rate
+
+		if goal_states is None:
+			goal_states = self.goal_states
+
+		# For each goal...
+		for gdx, goal in enumerate(goal_states):
+			# Compute GR delta wrt this goal
+			# Will use linear interpolation form of the GR update equation, so no need for prediction error
+			if s_kp == goal:
+				GR_value = 1
+			else:
+				GR_value = self.gamma * np.max(self.G[s_kp, :, goal])
+
+			# Consolidate deltas
+			dG[s_k, a_k, goal] += GR_value
+			mG[s_k, a_k, goal] *= (1 - self.alpha)
+
+		# Update GR according to interpolation form of the update equation
+		self.G = mG * self.G + self.alpha * dG
+
+		# Potentially add noise
+		if noise > 0:
+			self.G += np.random.normal(0, noise, size=self.G.shape)
+
+		# Consolidate policies according to updated GR
+		if update_policies:
+			for goal in self.goal_states:
+				self.policies[goal] = self.derive_policy(goal)
+
+	def compute_EVB_vector(self, goal_states, replay_seq, prospective=False, verbose=False, mode='full'):
 		"""
 		Compute the EVB vector EVB(s, :, e_k) -- that is, the expected value of backing up `e_k` for state `s` with
 		respect to all possible goals.
@@ -214,6 +260,7 @@ class GeodesicAgent(object):
 				If prospective=True, the need term of EVB is computed with respect to the agent's initial
 				state distribution.
 			verbose (boolean): Controls whether various intermediate variables are returned at the end of the process.
+			mode (string):
 
 		Returns:
 			MEVBs (np.ndarray): The vector of EVBs, with one entry per goal/transition pair.
@@ -226,6 +273,7 @@ class GeodesicAgent(object):
 		"""
 		MEVBs = np.zeros((len(goal_states), len(self.memory)))  # Best transition is picked greedily at each step
 		G_ps = {}  # At each replay step, cache G primes since they are goal-invariant
+		dGs = {}   # Also cache the direct updates
 
 		state_needs = None
 		transition_needs = None
@@ -254,18 +302,30 @@ class GeodesicAgent(object):
 			for tdx, transition in enumerate(self.memory):
 				if tdx in G_ps.keys():
 					G_p = G_ps[tdx]
+					dG = dGs[tdx]
 				else:
 					dG, _ = self.compute_nstep_update(transition, replay_seq=replay_seq,
 													  goal_states=goal_states)
+					dGs[tdx] = dG
+
 					G_p = self.G + self.alpha * dG
 					G_ps[tdx] = G_p
 
-				need, gain, evb = self.compute_multistep_EVB(transition, goal, policy,
-															 replay_seq,
-															 curr_state=self.curr_state,
-															 M=M_pi,
-															 G_p=G_p,
-															 prospective=prospective)
+				if mode == 'full':
+					need, gain, evb = self.compute_multistep_EVB(transition, goal, policy,
+																 replay_seq,
+																 curr_state=self.curr_state,
+																 M=M_pi,
+																 G_p=G_p,
+																 prospective=prospective)
+				elif mode == 'sweeping':
+					need, gain, evb = self.compute_sweeping_EVB(transition, goal,
+																replay_seq,
+																curr_state=self.curr_state,
+																M=M_pi,
+																dG=dG,
+																prospective=prospective)
+
 
 				MEVBs[gdx, tdx] = evb
 
@@ -279,8 +339,18 @@ class GeodesicAgent(object):
 		else:
 			return MEVBs
 
+	def uniform_replay(self, num_steps):
+		replay_seq = []
+		for step in range(num_steps):
+			# Pick a memory at random
+			mem = np.random.choice(len(self.memory))
+			replay_seq.append(self.memory[mem])
+
+			# Learn
+			self.nstep_learn(replay_seq)
+
 	def replay(self, num_steps, goal_states=None, goal_dist=None, prospective=False, verbose=False,
-			   check_convergence=True, convergence_thresh=0.0, otol=1e-6, learn_seq=None):
+			   check_convergence=True, convergence_thresh=0.0, otol=1e-6, learn_seq=None, EVB_mode='full'):
 		"""
 		Perform replay, prioritised under a (meta-)expected value of backup rule.
 		Do this by iterating over all available transitions in memory, and averaging
@@ -301,6 +371,7 @@ class GeodesicAgent(object):
 			otol (float): Ties in EVB are broken randomly. Otol defines the threshold for a tie.
 			learn_seq (list): If provided, learn_seq stipulates the sequence of state to be replayed. All the EVB
 				metrics are still computed for analysis purposes, but the outcome is ignored.
+			EVB_mode (string):
 
 		Returns:
 			replay_seq (np.ndarray): The sequence of chosen replays.
@@ -336,7 +407,7 @@ class GeodesicAgent(object):
 		replay_seq = []  # Maintain a list of replayed memories for use in multistep backups
 		backups = []  # Maintain a list of transitions replayed in each backup step
 		for step in range(num_steps):
-			out = self.compute_EVB_vector(goal_states, replay_seq, prospective, verbose)
+			out = self.compute_EVB_vector(goal_states, replay_seq, prospective, verbose, EVB_mode)
 			if verbose:
 				MEVBs, (state_need, transition_need, gain) = out
 				state_needs[step, :, :, :] = state_need
@@ -383,7 +454,7 @@ class GeodesicAgent(object):
 		"""
 		Perform replay prioritized under a regime where the goal evolves through some dynamics process, described
 		by a goal transition matrix. Like in replay(), this prioritization is accomplished by computing the
-		expected utility of replaying all memories and pikcing the best one.
+		expected utility of replaying all memories and picking the best one.
 
 		The "dynamic" EVB of a given transition can be straightforwardly shown to be equal to:
 
@@ -395,7 +466,7 @@ class GeodesicAgent(object):
 
 		Args:
 			num_steps (int): Maximum number of steps of replay to be performed.
-			goal_states (list): The list of possible goal states.
+			goal_states (np.ndarray): The list of possible goal states.
 			goal_dynamics (np.ndarray): Matrix describing the goal evolution process.
 			init_goal_dist (np.ndarray): The initial distribution over goal activation.
 			prospective (boolean): Controls whether the agent plans prospectively or using their current state.
@@ -507,11 +578,24 @@ class GeodesicAgent(object):
 
 	def compute_multistep_EVB(self, transition, goal, policy, replay_seq, curr_state, M, G_p=None, prospective=False):
 		"""
-			Compute the expected value of GR backup for a particular sequence of transitions
-			with respect to a particular goal state. Derivation for the factorization
-			EVB = need * gain follows from Mattar & Daw (2018), defining GR analogues
-			of Q and V functions.
+		Compute the expected value of GR backup for a particular sequence of transitions
+		with respect to a particular goal state. Derivation for the factorization
+		EVB = need * gain follows from Mattar & Daw (2018), defining GR analogues
+		of Q and V functions.
+
+		Args:
+			transition ():
+			goal ():
+			policy ():
+			replay_seq ():
+			curr_state ():
+			M ():
+			G_p ():
+			prospective ():
+
+		Returns:
 		"""
+
 		# Collect variables
 		s_k, a_k, s_kp = transition
 
@@ -528,6 +612,42 @@ class GeodesicAgent(object):
 
 		# Compute and return EVB + factors
 		return need, gain, need * gain
+
+	def compute_sweeping_EVB(self, transition, goal, replay_seq, curr_state, M, dG=None, prospective=False):
+		"""
+		Compute the expected value of GR backup for a particular sequence of transitions
+		with respect to a particular goal state. Derivation for the factorization
+		EVB = need * gain follows from Mattar & Daw (2018), defining GR analogues
+		of Q and V functions.
+
+		Args:
+			transition ():
+			goal ():
+			replay_seq ():
+			curr_state ():
+			M ():
+			dG ():
+			prospective ():
+
+		Returns:
+		"""
+
+		# Collect variables
+		s_k, a_k, s_kp = transition
+
+		# Compute the need of this transition wrt this goal
+		need = self.compute_need(curr_state, s_k, M, prospective)
+
+		# Derivation of this update prioritisation shows that EVB = 0 for the special case where
+		# s_k == goal
+		if s_k == goal:
+			return need, 0, 0
+
+		# Compute gain for this transition (and induced n-step backup)
+		sweep_gain = self.compute_nstep_Bellman_resid(transition, replay_seq, goal, dG=dG)
+
+		# Compute and return EVB + factors
+		return need, sweep_gain, need * sweep_gain
 
 	def get_optimal_subseq(self, replay_seq, goal, tol=1e-6, end=None):
 		"""
@@ -713,6 +833,33 @@ class GeodesicAgent(object):
 	def check_optimal(self, s_k, a_k, goal, tol=1e-6):
 		return abs(self.G[s_k, a_k, goal] - np.max(self.G[s_k, :, goal])) <= tol
 
+	def compute_nstep_Bellman_resid(self, transition, replay_seq, goal, dG=None, optimal_subseq=None):
+		"""
+
+		Args:
+			transition ():
+			replay_seq ():
+			goal ():
+			dG ():
+			optimal_subseq ():
+
+		Returns:
+
+		"""
+
+		# Collect variables
+		s_k, a_k, s_kp = transition
+
+		# Get optimal subsequence of replay_seq with respect to goal
+		if optimal_subseq is None:
+			optimal_subseq = self.get_optimal_subseq(replay_seq, goal, end=s_k)
+
+		# Compute new GR given this primary transition + optimal subsequence
+		if dG is None:
+			dG, _ = self.compute_nstep_update(transition, optimal_subseqs=[optimal_subseq], goal_states=[goal])
+
+		return np.sum(np.abs(dG))
+
 	def compute_nstep_gain(self, transition, replay_seq, goal, policy, G_p=None, optimal_subseq=None):
 		"""
 			Compute gain blah
@@ -770,6 +917,106 @@ class GeodesicAgent(object):
 
 		return M
 
+
+class SftmxGeodesicAgent(GeodesicAgent):
+	def __init__(self, num_states: int, num_actions: int, goal_states: np.ndarray,
+				 T: np.ndarray,
+				 goal_dist: np.ndarray = None,
+				 s0_dist: np.ndarray = None,
+				 alpha: float = 0.3,
+				 gamma: float = 0.95,
+				 min_gain: float = 0,
+				 policy_temperature: float = 1.0):
+		"""
+
+		Args:
+			policy_temperature:
+		"""
+
+		self.policy_temperature = policy_temperature
+		super().__init__(num_states, num_actions, goal_states, T, goal_dist, s0_dist,
+						 alpha, gamma, min_gain)
+
+	def derive_policy(self, goal_state, G=None, set_policy=False, epsilon=0, policy_temperature=None):
+		"""
+		Derive the policy for reaching a given goal state. Unlike the absolute max in the vanilla
+		GeodesicAgent class, here we use a softmax. (As such, the softmax parameter is ignored.)
+
+		Args:
+			goal_state (int): The goal with respect to which the policy is derived.
+			G (np.ndarray, optional): The Geodesic representation over which the policy is derived.
+				If none is provided, the agent's current one will be used.
+			set_policy (boolean): If True, the computed policy will update the agent's current policy
+				 for the specified goal.
+			epsilon (float): Epsilon parameter for epsilon-greedy action policy.
+			policy_temperature (float):
+
+		Returns:
+			policy (np.ndarray): The computed policy.
+		"""
+
+		# Allow arbitrary G to be fed in, default to current G
+		if G is None:
+			G = self.G
+
+		# Ditto the policy temperature
+		if policy_temperature is None:
+			policy_temperature = self.policy_temperature
+
+		policy = np.zeros((self.num_states, self.num_actions))
+
+		# Compute policy
+		for state in range(self.num_states):
+			# Recall that the GR is actually an SR and that SR values are actually Q-values
+			# from a certain point of view. So we can feed them directly into the softmax equation.
+			probs = softmax(G[state, :, goal_state], policy_temperature)
+			policy[state, :] = probs
+
+		# Cache if wanted
+		if set_policy:
+			self.policies[goal_state] = policy
+
+		return policy
+
+	def update_state_policy(self, state, goal_state, G=None, set_policy=False, epsilon=0, policy_temperature=None):
+		"""
+		Update the internal policy only for a given state. Unlike the vanilla GeodesicAgent
+		class, here we use a softmax to compute the best policy.
+
+		Args:
+			state (int): The state receiving the policy update
+			goal_state (int): The state with respect to which the policy is being updated
+			G (np.ndarray, optional): The Geodesic representation over which the policy is derived.
+				If none is provided, the agent's current one will be used.
+			set_policy (boolean): If True, the computed policy will update the agent's current policy
+				 for the specified goal.
+			epsilon (float): Epsilon parameter for epsilon-greedy action policy.
+
+		Returns:
+			policy (np.ndarray): The computed policy.
+		"""
+
+		# Allow arbitrary G to be fed in, default to current G
+		if G is None:
+			G = self.G
+		if policy_temperature is None:
+			policy_temperature = self.policy_temperature
+
+		# Compute policy
+		probs = softmax(G[state, :, goal_state], policy_temperature)
+
+		if not set_policy:  # Only re-copy the whole thing if we're not planning on saving it.
+			policy = self.policies[goal_state].copy()
+		else:
+			policy = self.policies[goal_state]
+
+		policy[state, :] = probs
+
+		# Cache if wanted
+		if set_policy:
+			self.policies[goal_state] = policy
+
+		return policy
 
 if __name__ == '__main__':
 	pass

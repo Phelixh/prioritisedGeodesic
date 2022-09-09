@@ -161,7 +161,7 @@ class MarkovDecisionProcess(object):
 			next_state (int): The successor state observed after taking the action.
 			reward (float): The received reward.
 		"""
-		action = np.random.choice(self.num_actions, p=policy)
+		action = np.random.choice(self.num_actions, p=policy[state])
 		next_state, reward = self.perform_action(state, action, reward_vector)
 		return action, next_state, reward
 
@@ -204,6 +204,19 @@ class MarkovDecisionProcess(object):
 				break
 
 		return update_G
+
+	def get_all_transitions(self, tol=1e-6):
+		"""
+			Return a list of all (s, a, s') tuples for which P(s' | s, a) >= tol.
+		"""
+		experiences = []
+		for start in range(self.num_states):
+			for action in range(self.num_actions):
+				for successor in range(self.num_states):
+					if self.transitions[start, action, successor] >= tol:
+						experiences.append((start, action, successor))
+
+		return experiences
 
 
 ####### Testing script

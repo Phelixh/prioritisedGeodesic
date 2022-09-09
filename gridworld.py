@@ -143,20 +143,6 @@ class GridWorld(MarkovDecisionProcess):
 			self.transitions[state, :, :] = 0  # This state can't lead anywhere...
 			self.transitions[state, :, state] = 1  # ... but to itself
 
-	def get_all_transitions(self, tol=1e-6):
-		"""
-			Return a list of all state-action pairs and their successors. Samples only once,
-			so only complete for grid-stochasticity = 0.
-		"""
-		experiences = []
-		for start in range(self.num_states):
-			for action in range(self.num_actions):
-				for successor in range(self.num_states):
-					if self.transitions[start, action, successor] >= tol:
-						experiences.append((start, action, successor))
-
-		return experiences
-
 	def draw(self, use_reachability=False, ax=None, figsize=(12, 12)):
 		# Generic setup
 		if not ax:
@@ -230,8 +216,6 @@ class Bottleneck(GridWorld):
 	"""
 		Specific class for a bottleneck GridWorld -- two arenas connected by a corridor. Defaults the start
 		position to the northwest corner, with deterministic dynamics.
-
-		TODO: __bottleneck_walls atm are semipermeable. Add a flag to set this one way or the other.
 	"""
 
 	def __init__(self, room_width, corridor_width, height, stoch=0, init_state_distribution=None):
