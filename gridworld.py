@@ -5,7 +5,7 @@ import numpy as np
 import math
 
 from MarkovDecisionProcess import MarkovDecisionProcess
-from RL_utils import oned_twod, compute_occupancy
+from RL_utils import oned_twod, compute_occupancy, twod_oned
 
 
 class GridWorld(MarkovDecisionProcess):
@@ -16,7 +16,8 @@ class GridWorld(MarkovDecisionProcess):
 	may be disallowed, corresponding to the existence of barriers.
 	"""
 
-	def __init__(self, width, height, epsilon=0, walls=None, term_states=None, init_state_distribution=None):
+	def __init__(self, width, height, epsilon=0, walls=None, term_states=None, init_state_distribution=None,
+				 semipermeable=False):
 		"""
 		Initialize GridWorld object with given dimensions, 4 actions (compass directions)
 		and given set of barriers ((S,A) tuples that are banned). Each action
@@ -40,6 +41,9 @@ class GridWorld(MarkovDecisionProcess):
 
 		if walls is None:
 			walls = []
+		else:
+			walls = walls.copy()
+
 		if term_states is None:
 			term_states = []
 
@@ -53,16 +57,24 @@ class GridWorld(MarkovDecisionProcess):
 		## arena boundaries
 		self.blocked_paths = []
 
+		self.arena_boundaries = []
 		# Top and bottom rows can't move up or down, respectively
 		for i in range(self.width):
-			self.blocked_paths.append((i, 1))  # Top row can't move up
-			self.blocked_paths.append((num_states - self.width + i, 3))  # Bottom row can't move down
+			self.arena_boundaries.append((i, 1))  # Top row can't move up
+			self.arena_boundaries.append((num_states - self.width + i, 3))  # Bottom row can't move down
 
+		# Left and right columns can't move left or right, respectively
 		for i in range(self.height):
-			self.blocked_paths.append((i * self.width, 0))  # Left column can't move left
-			self.blocked_paths.append((self.width - 1 + (i * self.width), 2))  # Right column can't move right
+			self.arena_boundaries.append((i * self.width, 0))  # Left column can't move left
+			self.arena_boundaries.append((self.width - 1 + (i * self.width), 2))  # Right column can't move right
+
+		self.blocked_paths.extend(self.arena_boundaries)
 
 		# Add user-defined walls
+		if not semipermeable:
+			ds_walls = self.double_side_walls(walls)
+			walls.extend(ds_walls)
+
 		self.blocked_paths.extend(walls)
 
 		# Build transition matrix
@@ -78,6 +90,41 @@ class GridWorld(MarkovDecisionProcess):
 
 		# Having all these things, instantiate the underlying MDP
 		super().__init__(self.transitions, num_actions, init_state_distribution)
+
+	def double_side_walls(self, walls):
+		"""
+		For each wall in `walls`, add the complementary wall to make it block motion in both directions. No checks
+		are performed that the walls in `walls` are proper or valid.
+
+		Args:
+			walls (list): List of banned (state, action) tuples.
+
+		Returns:
+
+		"""
+		if not walls:
+			return []
+
+		double_walls = []
+		for wall in walls:
+			if wall in self.arena_boundaries:  # Can't be double-sided (no states exist on the other side)
+				continue
+
+			double_walls.append(self.get_double_wall(wall))
+
+		return double_walls
+
+	def get_double_wall(self, wall):
+		s, a = wall
+
+		if a == 0:
+			return s - 1, 2
+		elif a == 1:
+			return s - self.width, 3
+		elif a == 2:
+			return s + 1, 0
+		elif a == 3:
+			return s + self.width, 1
 
 	def __get_succ_dist(self, src, action, epsilon, blocked_paths):
 		"""
@@ -143,7 +190,7 @@ class GridWorld(MarkovDecisionProcess):
 			self.transitions[state, :, :] = 0  # This state can't lead anywhere...
 			self.transitions[state, :, state] = 1  # ... but to itself
 
-	def draw(self, use_reachability=False, ax=None, figsize=(12, 12)):
+	def draw(self, use_reachability=False, ax=None, figsize=(12, 12), title='', label_states=False):
 		# Generic setup
 		if not ax:
 			fig, ax = plt.subplots(1, 1, figsize=figsize)
@@ -194,6 +241,16 @@ class GridWorld(MarkovDecisionProcess):
 				row, col = oned_twod(state, self.width, self.height)
 				rect = patches.Rectangle((col, row), 1, 1, facecolor='k')
 				ax.add_patch(rect)
+
+		# Give a title
+		ax.set_title(title)
+
+		# If desired, label every state
+		if label_states:
+			for x in range(self.width):
+				for y in range(self.height):
+					state_id = twod_oned(x, y, self.width)
+					ax.text(x + 0.5, y + 0.5, '%d' % state_id)
 
 		return ax
 

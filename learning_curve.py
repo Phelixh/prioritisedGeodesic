@@ -11,7 +11,7 @@ width = 10
 height = 7
 num_states = width * height
 
-num_sims = 100
+num_sims = 300
 replay_steps = [5, 10, 20, 40, 60, 80]
 
 uni_times = np.zeros((num_sims, len(replay_steps)))
@@ -51,7 +51,7 @@ for rdx, num_replay_steps in enumerate(replay_steps):
         ga_uni.remember(all_experiences)  # Preload our agent with all possible memories
 
         ## Run replay
-        # ga_pri.replay(num_steps=num_replay_steps, verbose=False, prospective=True)
+        ga_pri.replay(num_steps=num_replay_steps, verbose=False, prospective=True)
         ga_uni.uniform_replay(num_replay_steps)
 
         ## Run behaviour
@@ -128,7 +128,7 @@ for rdx, num_replay_steps in enumerate(ext_replay_steps):
         except:
             add_uni_times[sim, rdx] = np.nan
 
+
+
 uni_times = np.hstack((uni_times, add_uni_times))
-plt.figure()
-plt.plot(np.mean(uni_times, axis=0))
-plt.show()
+np.savez('./Data/learning_curves/learning_curves.npz', pri_times=pri_times, uni_times=uni_times)

@@ -21,6 +21,7 @@ def plot_replay(gridworld, replay_sequence, ax=None, figsize=(12, 12), highlight
 
 	# Paint the grid world to the figure
 	ax = gridworld.draw(use_reachability=True, ax=ax, figsize=figsize)
+	ax.set_aspect('equal')
 
 	## Now add arrows for replayed states
 	# Colours!
@@ -95,6 +96,7 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, para
 	## Need
 	# Plot need by shading in states
 	ax = axes[0]
+	ax.set_aspect('equal')
 	ax.set_title('Need')
 	gridworld.draw(use_reachability=True, ax=ax)
 
@@ -102,6 +104,8 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, para
 	min_need = np.min(need[np.nonzero(need)])  # Dumb hack so that need = 0 states don't appear slightly red
 	max_need = np.max(need)
 	alpha_fac = 1
+	distinguish_max = False
+	distinguish_chosen = False
 
 	if 'min_need' in params.keys():
 		min_need = params['min_need']
@@ -109,6 +113,10 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, para
 		max_need = params['max_need']
 	if 'alpha_fac' in params.keys():
 		alpha_fac = params['alpha_fac']
+	if 'distinguish_max' in params.keys():
+		distinguish_max = params['distinguish_max']
+	if 'distinguish_chosen' in params.keys():
+		distinguish_chosen = params['distinguish_chosen']
 
 	norm_need = colours.Normalize(vmin=min_need, vmax=max_need)(need)
 
@@ -134,6 +142,7 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, para
 	## Gain
 	# Plot gain by shading arrows
 	ax = axes[1]
+	ax.set_aspect('equal')
 	ax.set_title('Gain')
 	gridworld.draw(use_reachability=True, ax=ax)
 
@@ -156,7 +165,7 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, para
 		succ_y, succ_x = np.array(oned_twod(s_kp, gridworld.width, gridworld.height)) + CENTRE_OFFSET
 
 		# Plot
-		if abs(np.max(norm_gain) - norm_gain[tdx]) < 1e-8:  # Distinguish the maximal gain transitions
+		if abs(np.max(norm_gain) - norm_gain[tdx]) < 1e-8 and distinguish_max:  # Distinguish the maximal gain transitions
 			ax.arrow(start_x, start_y, succ_x - start_x, succ_y - start_y, 
 				  length_includes_head=True, head_width=0.25, color='r')
 		else:
@@ -166,6 +175,7 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, para
 	## MEVB
 	# Plot MEVB by shading arrows
 	ax = axes[2]
+	ax.set_aspect('equal')
 	ax.set_title('EVB')
 	gridworld.draw(use_reachability=True, ax=ax)
 
@@ -191,7 +201,7 @@ def plot_need_gain(gridworld, transitions, need, gain, MEVB, specials=None, para
 		if specials is not None and transition in specials:  # Custom distinction for a set of transitions
 			ax.arrow(start_x, start_y, succ_x - start_x, succ_y - start_y, 
 				  length_includes_head=True, head_width=0.25, color='k')
-		elif abs(np.max(norm_MEVB) - norm_MEVB[tdx]) < 1e-8:  # Distinguish the eventually-chosen transition
+		elif abs(np.max(norm_MEVB) - norm_MEVB[tdx]) < 1e-8 and distinguish_chosen:  # Distinguish the eventually-chosen transition
 			ax.arrow(start_x, start_y, succ_x - start_x, succ_y - start_y, 
 					  length_includes_head=True, head_width=0.25, color='r')
 		else:

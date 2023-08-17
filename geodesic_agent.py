@@ -1,7 +1,8 @@
 import numpy as np
 from RL_utils import dynamics_policy_onestep, softmax
 
-
+## TODO: Implement prospective need evaluation by sampling
+## TODO: think about the need term in dynamic replay (does it take into account being at the curr goal for next goal?)
 class GeodesicAgent(object):
 	"""
 		The GeodesicAgent class solves MDPs using the Geodesic Representation (GR),
@@ -65,12 +66,22 @@ class GeodesicAgent(object):
 		# Separate transition structures for each of the modified MDPs, one per goal
 		self.mod_Ts = {}
 		for i in range(len(goal_states)):
-			mod_T = self.T.copy()
 			goal = goal_states[i]
-			mod_T[goal, :, :] = 0
-			mod_T[goal, :, goal] = 1
+			mod_T = self.modify_transition_mat(T, goal)
 
 			self.mod_Ts[goal] = mod_T
+
+	def modify_transition_mat(self, T, goal):
+		mod_T = np.zeros((self.num_states + 1, self.num_actions, self.num_states + 1))
+
+		# Everything about the modified transition matrix is the same except it has an extra junk state
+		# with a Prob = 1 self-loop, and the goal has a transition to it with Prob = 1
+		mod_T[:self.num_states, :, :self.num_states] = T  # same
+		mod_T[-1, :, -1] = 1  # self-loop
+		mod_T[goal, :, :] = 0
+		mod_T[goal, :, -1] = 1  # goal->junk state transition
+
+		return mod_T
 
 	def initialize_GR(self, new_G, update_policies=True):
 		"""
@@ -171,7 +182,7 @@ class GeodesicAgent(object):
 
 		return policy
 
-	def remember(self, transitions):
+	def remember(self, transitions, overwrite=False):
 		"""
 			Add a set of transitions to the memory bank.
 
@@ -180,6 +191,9 @@ class GeodesicAgent(object):
 					Each memory must be a tuple (s, a, g), indicating that action a was
 					taken in state s and reached state g.
 		"""
+		if overwrite:
+			self.memory = []
+
 		for transition in transitions:
 			if transition not in self.memory:
 				self.memory.extend([transition])
@@ -200,6 +214,14 @@ class GeodesicAgent(object):
 				self.memory.remove(transition)
 			elif verbose:
 				print('transition', transition, ' not located in memory.')
+
+	def decay(self, decay_rate, update_policies=True):
+		self.G *= decay_rate
+
+		# Consolidate policies according to updated GR
+		if update_policies:
+			for goal in self.goal_states:
+				self.policies[goal] = self.derive_policy(goal)
 
 	def basic_learn(self, transition, goal_states=None, decay_rate=None, noise=0, update_policies=True):
 		"""
@@ -292,7 +314,7 @@ class GeodesicAgent(object):
 				policy = self.derive_policy(goal)
 
 			# Compute SR induced by this policy and the task dynamics
-			M_pi = self.compute_occupancy(policy, self.mod_Ts[goal])
+			M_pi = self.compute_occupancy(policy, self.mod_Ts[goal])[:self.num_states, :self.num_states]
 
 			# Log, if wanted
 			if verbose:
@@ -304,8 +326,7 @@ class GeodesicAgent(object):
 					G_p = G_ps[tdx]
 					dG = dGs[tdx]
 				else:
-					dG, _ = self.compute_nstep_update(transition, replay_seq=replay_seq,
-													  goal_states=goal_states)
+					dG, _ = self.compute_nstep_update(transition, replay_seq=replay_seq, goal_states=goal_states)
 					dGs[tdx] = dG
 
 					G_p = self.G + self.alpha * dG
@@ -450,7 +471,8 @@ class GeodesicAgent(object):
 			return np.array(replay_seq), (state_needs, transition_needs, gains, all_MEVBs), backups
 
 	def dynamic_replay(self, num_steps, goal_states, goal_dynamics, init_goal_dist, prospective=False,
-					   verbose=False, check_convergence=True, convergence_thresh=0.0, otol=1e-6, learn_seq=None):
+					   verbose=False, check_convergence=True, convergence_thresh=0.0, otol=1e-6, learn_seq=None,
+					   disc_rate=None, EVB_mode='full'):
 		"""
 		Perform replay prioritized under a regime where the goal evolves through some dynamics process, described
 		by a goal transition matrix. Like in replay(), this prioritization is accomplished by computing the
@@ -480,6 +502,8 @@ class GeodesicAgent(object):
 			otol (float): Ties in EVB are broken randomly. Otol defines the threshold for a tie.
 			learn_seq (list): If provided, learn_seq stipulates the sequence of state to be replayed. All the EVB
 				metrics are still computed for analysis purposes, but the outcome is ignored.
+			disc_rate (float): Temporal discounting for whatever the time-step size is. Will be the agent's gamma
+				parameter by default.
 
 		Returns:
 			replay_seq (np.ndarray): The sequence of chosen replays.
@@ -494,6 +518,10 @@ class GeodesicAgent(object):
 			backups (list): The full list of backed-up states, on every step of replay. Includes auxiliary states
 				updated through multistep backups.
 		"""
+		# Check for discount rate
+		if disc_rate is None:
+			disc_rate = self.gamma
+
 		# If verbose usage, build storage structures
 		state_needs = None
 		transition_needs = None
@@ -510,9 +538,9 @@ class GeodesicAgent(object):
 		# Start replaying
 		replay_seq = []  # Maintain a list of replayed memories for use in multistep backups
 		backups = []  # Maintain a list of transitions replayed in each backup step
-		weights = np.linalg.inv(np.eye(len(goal_states)) - self.gamma * goal_dynamics) @ init_goal_dist
+		weights = np.linalg.inv(np.eye(len(goal_states)) - disc_rate * goal_dynamics) @ init_goal_dist
 		for step in range(num_steps):
-			out = self.compute_EVB_vector(goal_states, replay_seq, prospective, verbose)
+			out = self.compute_EVB_vector(goal_states, replay_seq, prospective, verbose, EVB_mode)
 			if verbose:
 				MEVBs, (state_need, transition_need, gain) = out
 				state_needs[step, :, :, :] = state_need

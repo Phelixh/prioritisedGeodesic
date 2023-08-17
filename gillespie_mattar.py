@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from graph import DiGraph
-from geodesic_agent import GeodesicAgent, SftmxGeodesicAgent
+from reward_agent import RewardAgent, SftmxRewardAgent
 from RL_utils import softmax
 
 np.random.seed(865612)
@@ -59,10 +59,10 @@ for arm in range(num_arms):
 	for rel_state in range(arm_length):
 		state = start_to_choice + arm * arm_length + rel_state
 
-		if not rel_state == 0: 
+		if not rel_state == 0:
 			edges[state, 0] = state - 1  # Backwards through arm
 
-		if not rel_state == arm_length - 1: 
+		if not rel_state == arm_length - 1:
 			edges[state, 1] = state + 1  # Forwards through arm
 
 # Task
@@ -86,10 +86,7 @@ behav_lr = 1
 behav_temp = 0.4
 
 num_replay_steps = 3
-replay_lr = 0.22
-replay_temp = 0.22  ## 0.3 0.8 1.5
 
-replay_decay = 0.9  # Decay of the replay Q-value vector
 decay_rate = 0.97  # GR decay rate on every step
 noise = 0.00  # Update noise
 
@@ -106,11 +103,9 @@ choices = np.zeros((num_sessions, num_trials))
 rewards = np.zeros((num_sessions, num_trials))
 goal_seq = np.zeros((num_sessions, num_trials))
 
-prechoice_replays = np.zeros((num_sessions, num_trials, num_replay_steps, 3)) - 1     # No states or actions are equal to -1
-postoutcome_replays = np.zeros((num_sessions, num_trials, num_replay_steps, 3)) - 1   # so obvious if some row is unfilled
+replay_tuple_size = 4
+postoutcome_replays = np.zeros((num_sessions, num_trials, num_replay_steps, replay_tuple_size)) - 1   # so obvious if some row is unfilled
 states_visited = np.zeros((num_sessions, num_trials, start_to_choice + arm_length))
-prec_Gs = np.zeros((num_sessions, num_trials, num_states, num_actions, num_states))
-posto_Gs = np.zeros((num_sessions, num_trials, num_states, num_actions, num_states))
 
 # Simulate
 for session in range(num_sessions):
@@ -122,18 +117,17 @@ for session in range(num_sessions):
 
 	# Reset agent parameters
 	behav_goal_vals = np.zeros(num_arms)
-	replay_goal_vals = np.zeros(num_arms)
 
 	# Reset agent
 	if not use_softmax:
-		ga = GeodesicAgent(num_states, num_actions, goal_states, alpha=behav_alpha, goal_dist=None, s0_dist=s0_dist, T=T)
+		ga = RewardAgent(num_states, num_actions, alpha=behav_alpha, s0_dist=s0_dist, T=T)
 	else:
-		ga = SftmxGeodesicAgent(num_states, num_actions, goal_states, alpha=behav_alpha, goal_dist=None, s0_dist=s0_dist, T=T,
+		ga = SftmxRewardAgent(num_states, num_actions, alpha=behav_alpha, s0_dist=s0_dist, T=T,
 								policy_temperature=policy_temperature)
 
-	ga.remember(all_experiences)
-	true_GR = gillespie_maze.solve_GR(num_iters=500, gamma=ga.gamma)
-	ga.initialize_GR(true_GR)
+	exps_with_rewards = [(s, a, sp, 0) for (s, a, sp) in all_experiences]
+	ga.remember(exps_with_rewards)
+
 
 	for trial in range(num_trials):
 		if trial % 50 == 0:
@@ -150,7 +144,7 @@ for session in range(num_sessions):
 		act_seq = action_seq(chosen_arm, arm_length, start_to_choice)
 		for adx, action in enumerate(act_seq):
 			next_state, reward = gillespie_maze.step(ga.curr_state, action=action, reward_vector=rvec)
-			ga.basic_learn((ga.curr_state, action, next_state), decay_rate=decay_rate, noise=noise)  # Update GR
+			ga.basic_learn((ga.curr_state, action, next_state, reward), decay_rate=decay_rate, noise=noise)  # Update GR
 
 			ga.curr_state = next_state
 			states_visited[session, trial, adx + 1] = ga.curr_state
@@ -158,31 +152,28 @@ for session in range(num_sessions):
 			# Check for rewards
 			if adx == len(act_seq) - 1:
 				# Update the value functions for each arm as Rescorla-Wagner + forgetting (linear interpolation form)
-				# behav_goal_vals *= (1 - behav_lr)
-				# behav_goal_vals[chosen_arm] += behav_lr * reward
-
-				replay_goal_vals[np.arange(len(replay_goal_vals)) != chosen_arm] *= replay_decay
-				replay_goal_vals[chosen_arm] += replay_lr * (reward - replay_goal_vals[chosen_arm])
-				# replay_goal_vals *= (1 - replay_lr)
-				# replay_goal_vals[chosen_arm] += replay_lr * reward
 				behav_goal_vals[chosen_arm] += behav_lr * (reward - behav_goal_vals[chosen_arm])
-				# replay_goal_vals[chosen_arm] += replay_lr * (reward - replay_goal_vals[chosen_arm])
 				reward_counter += reward
 				rewards[session, trial] = reward
 
-		# Post-outcome replay
+		# If a reward has been received for the first time, update memory to reflect this
 		if reward_counter == 1:
-			pass
-		elif reward_counter == reward_thresh - 1:
-			pass
+			mem = (active_goal - 1, 1, active_goal, 1)
+			ga.forget([(active_goal - 1, 1, active_goal, 0)])
+			ga.remember([(active_goal - 1, 1, active_goal, 1)])
 
-		posto_Gs[session, trial, :] = ga.G
-		replays, _, _ = ga.replay(num_replay_steps, goal_dist=softmax(replay_goal_vals, replay_temp), verbose=True,
-								  check_convergence=False, prospective=True, EVB_mode=replay_mode, alpha=replay_alpha)
+		# Post-outcome replay
+		replays, _, _ = ga.replay(num_replay_steps, verbose=True, prospective=True, alpha=replay_alpha)
 		postoutcome_replays[session, trial, :, :] = replays
 
 		# Update goal?
 		if reward_counter >= reward_thresh:
+			# Update memory to reflect the change of reward location
+			# (Technically, this should happen after the agent encounters the goal and finds it empty,
+			# but this should not matter much and simplifies the code.)
+			ga.remember([(active_goal - 1, 1, active_goal, 0)])
+			ga.forget([(active_goal - 1, 1, active_goal, 1)])
+
 			new_goals = np.delete(goal_states, np.argwhere(goal_states == active_goal))
 			active_goal = np.random.choice(new_goals)
 
@@ -190,10 +181,11 @@ for session in range(num_sessions):
 			rvec[active_goal] = 1
 			reward_counter = 0
 
+
+
 # Save everything
-np.savez('gillespie_debug4.npz', prec=prechoice_replays, posto=postoutcome_replays, state_trajs=states_visited,
-		 choices=choices, rewards=rewards, goal_seq=goal_seq, prec_Gs=prec_Gs, posto_Gs=posto_Gs,
-		 num_sessions=num_sessions, num_trials=num_trials, trial=trial)
+np.savez('gillespie_mattar.npz', posto=postoutcome_replays, state_trajs=states_visited, choices=choices,
+		 rewards=rewards, goal_seq=goal_seq, num_sessions=num_sessions, num_trials=num_trials, trial=trial)
 
 print('done')
 

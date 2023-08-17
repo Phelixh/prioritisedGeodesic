@@ -1,3 +1,5 @@
+from RL_utils import compute_occupancy
+
 import numpy as np
 np.set_printoptions(precision=3, suppress=True)
 
@@ -205,7 +207,13 @@ class MarkovDecisionProcess(object):
 
 		return update_G
 
-	def get_all_transitions(self, tol=1e-6):
+	def is_connected(self):
+		uniform_policy = np.ones((self.num_states, self.num_actions))
+		M = compute_occupancy(uniform_policy, self.transitions)
+
+		return 0 not in M
+
+	def get_all_transitions(self, tol=1e-6, filter_self_transitions=True):
 		"""
 			Return a list of all (s, a, s') tuples for which P(s' | s, a) >= tol.
 		"""
@@ -213,10 +221,22 @@ class MarkovDecisionProcess(object):
 		for start in range(self.num_states):
 			for action in range(self.num_actions):
 				for successor in range(self.num_states):
+					if filter_self_transitions and start == successor:  # Disallows replay of invalid transitions
+						continue
+
 					if self.transitions[start, action, successor] >= tol:
 						experiences.append((start, action, successor))
 
 		return experiences
+
+	def update_transitions(self, new_transitions):
+		"""
+			Update the current transition matrix to a new one.
+
+		Args:
+			new_transitions (np.ndarray): THe new transition matrix
+		"""
+		self.transitions = new_transitions
 
 
 ####### Testing script

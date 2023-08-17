@@ -44,6 +44,22 @@ def oned_twod(state, width, height):
 	return row, col
 
 
+def twod_oned(x, y, width):
+	"""
+	Given a state with 2d coordinates (x, y) in a box with width `width`,
+	transform it to a 1d coordinate.
+
+	Args:
+		x ():
+		y ():
+		width ():
+
+	Returns:
+
+	"""
+	return (y * width) + x
+
+
 def is_malformed_policy(policy):
 	"""
 		Check if any rows don't add up to 1.
@@ -70,3 +86,35 @@ def softmax(vals, temperature):
 
 	nums = np.exp(vals / temperature)
 	return nums / np.sum(nums)
+
+
+def sequenceness(replay_seq):
+	"""
+	Given a sequence of replay steps, evaluate how sequential the sequence is.
+
+	Args:
+		replay_seq (np.ndarray):
+
+	Returns:
+
+	"""
+	num_seqs = 0
+	direction = 0  # 1 = forward, 0 = indeterminate, -1 = reverse
+	num_replay_steps = replay_seq.shape[0]
+	for i in range(1, num_replay_steps):
+		prev_s, prev_a, prev_sp = replay_seq[i - 1]
+		s, a, sp = replay_seq[i]
+
+		# check for continuing a sequence
+		if prev_sp == s and direction >= 0:  # continuing a forward replay
+			direction = 1
+			continue
+		if sp == prev_s and direction <= 0:  # continuing a reverse replay
+			direction = -1
+			continue
+
+		# not continuing in either direction, new sequence
+		direction = 0
+		num_seqs += 1
+
+	return 1 - (num_seqs / num_replay_steps)

@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from graph import DiGraph
-from geodesic_agent import GeodesicAgent, SftmxGeodesicAgent
+from reward_agent import RewardAgent, SftmxRewardAgent
 from RL_utils import softmax
 
 np.random.seed(865612)
@@ -121,9 +121,8 @@ choices = np.zeros((num_mice, num_sessions, num_trials))
 rewards = np.zeros((num_mice, num_sessions, num_trials))
 sess_seq = np.zeros((num_mice, num_sessions, num_trials))
 
-postoutcome_replays = np.zeros((num_mice, num_sessions, num_trials, num_replay_steps, 3)) - 1   # so obvious if some row is unfilled
+postoutcome_replays = np.zeros((num_mice, num_sessions, num_trials, num_replay_steps, 4)) - 1   # so obvious if some row is unfilled
 states_visited = np.zeros((num_mice, num_sessions, num_trials, start_to_choice + arm_length))
-posto_Gs = np.zeros((num_mice, num_sessions, num_trials, num_states, num_actions, num_states))
 
 for mouse in range(num_mice):
     # Agent parameters
@@ -132,12 +131,10 @@ for mouse in range(num_mice):
 
     # Instantiate agent
     if not use_softmax:
-        ga = GeodesicAgent(num_states, num_actions, goal_states, alpha=alpha, goal_dist=None, s0_dist=s0_dist, T=T)
+        ga = RewardAgent(num_states, num_actions, alpha=alpha, s0_dist=s0_dist, T=T)
     else:
-        ga = SftmxGeodesicAgent(num_states, num_actions, goal_states, alpha=alpha, goal_dist=None, s0_dist=s0_dist, T=T,
+        ga = SftmxRewardAgent(num_states, num_actions, alpha=alpha, s0_dist=s0_dist, T=T,
                                 policy_temperature=policy_temperature)
-
-    ga.remember(all_experiences)
 
     # Simulate
     sess_type = 0
@@ -157,6 +154,9 @@ for mouse in range(num_mice):
             behav_goal_vals[1] = 1.5
             behav_goal_vals[0] = 1
 
+        exps_with_rewards = [(s, a, sp, rvec[sp]) for (s, a, sp) in all_experiences]
+        ga.remember(exps_with_rewards, overwrite=True)
+
         for trial in range(num_trials):
             if trial % 50 == 0:
                 print('mouse %d, session %d, trial %d' % (mouse, session, trial))
@@ -172,7 +172,7 @@ for mouse in range(num_mice):
             act_seq = action_seq(chosen_arm, arm_length, start_to_choice)
             for adx, action in enumerate(act_seq):
                 next_state, reward = carey_maze.step(ga.curr_state, action=action, reward_vector=rvec)
-                ga.basic_learn((ga.curr_state, action, next_state), decay_rate=decay_rate, noise=noise)  # Update GR
+                ga.basic_learn((ga.curr_state, action, next_state, reward), decay_rate=decay_rate, noise=noise)  # Update GR
 
                 ga.curr_state = next_state
                 states_visited[mouse, session, trial, adx + 1] = ga.curr_state
@@ -184,25 +184,11 @@ for mouse in range(num_mice):
                     rewards[mouse, session, trial] = reward
 
             # Post-outcome replay
-            posto_Gs[mouse, session, trial, :] = ga.G
-            replays, _, _ = ga.replay(num_replay_steps, goal_dist=softmax(replay_goal_vals, replay_temp), verbose=True,
-                                      check_convergence=False, prospective=True, EVB_mode=replay_mode)
+            replays, _, _ = ga.replay(num_replay_steps, verbose=True, prospective=True)
             postoutcome_replays[mouse, session, trial, :, :] = replays
 
         sess_type = int(1 - sess_type)
 
 # Save everything
-np.savez('./Data/carey_mouse_data.npz', posto=postoutcome_replays, state_trajs=states_visited,
-         choices=choices, rewards=rewards, sess_seq=sess_seq, posto_Gs=posto_Gs, allow_pickle=True)
-
-# Visualize
-vis = False
-if vis:
-    plt.figure()
-    for i in range(num_trials):
-        if rewards[i] == 1:
-            plt.scatter(i, choices[i], marker='x', color='r')
-        else:
-            plt.scatter(i, choices[i], marker='.', color='b')
-
-print('success')
+np.savez('./Data/carey/carey_mattar_mouse_data.npz', posto=postoutcome_replays, state_trajs=states_visited,
+         choices=choices, rewards=rewards, sess_seq=sess_seq, allow_pickle=True)
